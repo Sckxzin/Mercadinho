@@ -4,7 +4,7 @@ const path = require('node:path');
 const express = require('express');
 const U = require('../util');
 
-const PUB = path.join(__dirname, '..', 'public');
+const PUB = path.join(__dirname, '..', '..', 'public');
 const { normTel } = U;
 const MSG_FALHA = 'Telefone ou PIN inválido. Se for seu primeiro acesso, peça o código ao mercado.';
 
@@ -85,7 +85,16 @@ module.exports = function registraApp({ app, api, db, baseUrl, audita }) {
       icons: [{ src: '/assets/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/assets/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }],
     });
   });
-  app.get('/sw.js', (req, res) => res.type('application/javascript').set('Cache-Control', 'no-store')
-    .send("self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('fetch',()=>{});"));
+  // service worker: guarda estilos e ícones no aparelho (abre mais rápido, inclusive com internet ruim).
+  // Os dados da conta NUNCA ficam em cache: sempre vêm do servidor.
+  const SW = `const C='cad-v5';
+self.addEventListener('install',()=>self.skipWaiting());
+self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>clients.claim())));
+self.addEventListener('fetch',e=>{const u=new URL(e.request.url);
+  if(e.request.method!=='GET'||u.origin!==location.origin||!u.pathname.startsWith('/assets/'))return;
+  e.respondWith(caches.open(C).then(async c=>{const hit=await c.match(e.request);
+    const rede=fetch(e.request).then(r=>{if(r.ok)c.put(e.request,r.clone());return r}).catch(()=>hit);
+    return hit||rede}));});`;
+  app.get('/sw.js', (req, res) => res.type('application/javascript').set('Cache-Control', 'no-store').send(SW));
   app.use('/assets', express.static(path.join(PUB, 'assets'), { maxAge: '7d' }));
 };

@@ -126,7 +126,7 @@ const extras = require('./test-extras');
   assert.equal((await call('POST', `/api/app/${slug}/ativar`, { telefone: '81988887777', codigo: '000000', pin: '4321' })).status, 401); ok('código errado é recusado');
   assert.equal((await call('POST', `/api/app/${slug}/ativar`, { telefone: '(81) 98888-7777', codigo: cod, pin: '12' })).status, 400); ok('PIN fraco/curto é recusado');
   r = await call('POST', `/api/app/${slug}/ativar`, { telefone: '(81) 98888-7777', codigo: cod, pin: '4321' });
-  assert.equal(r.status, 200); const sess = r.body.token; ok('primeiro acesso com código cria o PIN (telefone aceita máscara)');
+  assert.equal(r.status, 200); ok('primeiro acesso com código cria o PIN (telefone aceita máscara)');
   assert.equal((await call('POST', `/api/app/${slug}/ativar`, { telefone: '81988887777', codigo: cod, pin: '9999' })).status, 401); ok('código só funciona uma vez');
   assert.equal((await call('POST', `/api/app/${slug}/entrar`, { telefone: '81988887777', pin: '0000' })).status, 401); ok('PIN errado é recusado');
   r = await call('POST', `/api/app/${slug}/entrar`, { telefone: '+55 81 98888-7777', pin: '4321' });

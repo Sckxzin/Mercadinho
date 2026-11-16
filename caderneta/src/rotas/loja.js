@@ -33,7 +33,7 @@ module.exports = function registraLoja({ app, api, db, porToken, saldoDe, audita
     res.json(await db.all('SELECT * FROM promocoes WHERE mercado_id=? ORDER BY ativo DESC, id DESC', [req.mid]));
   });
   api.post('/promocoes', async (req, res) => {
-    const { titulo, descricao, preco, preco_original, validade } = req.body || {};
+    const { titulo, descricao } = req.body || {};
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório.' });
     const v = precosPromo(req.body);
     if (v.erro) return res.status(400).json({ erro: v.erro });

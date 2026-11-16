@@ -38,8 +38,14 @@ module.exports = async function extras({ db, base, call, ok, A, B, slug }) {
   assert.ok(U.faxinaLimites(Date.now() + 2 * 60 * 60_000) === 0); ok('contador anti-abuso é limpo (sem vazamento de memória)');
   assert.equal(U.verifica('a.b'), null); assert.equal(U.verifica('xx'), null); assert.equal(U.verifica(null), null); ok('token malformado não derruba o servidor');
 
+  for (const [rota, tipo] of [['/assets/ui.css', 'text/css'], ['/assets/icon-192.png', 'image/png'], [`/m/${slug}`, 'text/html'], ['/painel', 'text/html'], ['/c/qualquer-token-1234567890', 'text/html'], ['/sw.js', 'javascript']]) {
+    const x = await fetch(base + rota); assert.equal(x.status, 200, rota); assert.ok(x.headers.get('content-type').includes(tipo), rota);
+  }
+  ok('páginas, estilos e ícones são servidos (painel, app do cliente, link pessoal)');
   const h = await fetch(base + '/painel');
   assert.ok(h.headers.get('content-security-policy').includes("frame-ancestors 'none'")); assert.equal(h.headers.get('x-frame-options'), 'DENY'); ok('cabeçalhos de segurança (CSP, anti-iframe)');
+
+  const cont = await get('/api/contadores'); assert.ok(['comprovantes', 'avisos', 'validade'].every((k) => Number.isInteger(cont.body[k]))); ok('contadores das abas numa chamada só');
 
   console.log('\n  — lançamentos —');
   const c1 = await novoCli('Joana Teste', { telefone: '81 97777-0001', limite: '1.000' });
@@ -110,7 +116,7 @@ module.exports = async function extras({ db, base, call, ok, A, B, slug }) {
   assert.equal((await get('/api/clientes', A)).status, 401); assert.equal((await get('/api/clientes', A2)).status, 200);
   assert.equal((await post('/api/login', { email: 'a@a.com', senha: 'novasenha123' })).status, 200); ok('trocar senha: aparelhos antigos saem, este continua');
   await post('/api/eu/sair-de-todos', {}, A2); assert.equal((await get('/api/clientes', A2)).status, 401); ok('"sair de todos os aparelhos" funciona');
-  A = (await post('/api/login', { email: 'a@a.com', senha: 'novasenha123' })).body.token; // eslint-disable-line no-param-reassign
+  A = (await post('/api/login', { email: 'a@a.com', senha: 'novasenha123' })).body.token;
 
   console.log('\n  — comprovantes, cobranças e rotina —');
   const cliTok = (await get(`/api/clientes/${c2.id}/extrato`)).body.cliente.url.split('/').pop();
@@ -195,6 +201,10 @@ module.exports = async function extras({ db, base, call, ok, A, B, slug }) {
   const dv = r.body.devedores.find((d) => d.nome === 'Devedor Antigo'); assert.equal(dv.faixa, '61-90'); assert.equal(dv.dias, 70);
   assert.ok(r.body.faixas['61-90'] >= 7000); assert.ok(r.body.recebido_por_forma.length > 0); ok('relatório: devedores por idade da dívida e recebido por forma');
   r = await get('/api/resumo'); assert.ok(r.body.recebido_hoje > 0); ok('resumo mostra recebido hoje');
+  const cz = await novoCli('Estorno no Mês'); const f0 = (await get('/api/resumo')).body.fiado_no_mes;
+  const lz = (await post(`/api/clientes/${cz.id}/compras`, { valor: '33' })).body.id;
+  assert.equal((await get('/api/resumo')).body.fiado_no_mes, f0 + 3300);
+  await post(`/api/lancamentos/${lz}/estornar`, {}); assert.equal((await get('/api/resumo')).body.fiado_no_mes, f0); ok('compra estornada sai do "fiado no mês"');
 
   const cf = await novoCli('=HYPERLINK("http://mal")'); await post(`/api/clientes/${cf.id}/compras`, { valor: '1' });
   let resp = await raw('/api/export/clientes.csv', A); const bytes = Buffer.from(await resp.arrayBuffer()); let txt = bytes.toString('utf8');

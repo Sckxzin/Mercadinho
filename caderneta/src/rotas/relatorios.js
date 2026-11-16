@@ -26,12 +26,26 @@ module.exports = function registraRelatorios({ api, db, audita, soDono }) {
     const [s, dev, mes] = await Promise.all([
       db.get('SELECT COALESCE(SUM(valor),0) AS total FROM lancamentos WHERE mercado_id=?', [req.mid]),
       db.get('SELECT COUNT(*) AS n FROM (SELECT cliente_id FROM lancamentos WHERE mercado_id=? GROUP BY cliente_id HAVING SUM(valor)>0) x', [req.mid]),
-      db.get(`SELECT COALESCE(SUM(CASE WHEN tipo='compra' THEN valor END),0) AS fiado,
-          COALESCE(-SUM(CASE WHEN tipo='pagamento' THEN valor END),0) AS recebido,
-          COALESCE(-SUM(CASE WHEN tipo='pagamento' AND criado_em >= ? THEN valor END),0) AS recebido_hoje
-        FROM lancamentos WHERE mercado_id=? AND criado_em >= ?`, [inicioHoje, req.mid, inicioMes]),
+      // lançamentos estornados não contam nos totais do período
+      db.get(`SELECT COALESCE(SUM(CASE WHEN l.tipo='compra' THEN l.valor END),0) AS fiado,
+          COALESCE(-SUM(CASE WHEN l.tipo='pagamento' THEN l.valor END),0) AS recebido,
+          COALESCE(-SUM(CASE WHEN l.tipo='pagamento' AND l.criado_em >= ? THEN l.valor END),0) AS recebido_hoje
+        FROM lancamentos l LEFT JOIN lancamentos e ON e.estorno_de=l.id
+        WHERE l.mercado_id=? AND l.criado_em >= ? AND e.id IS NULL`, [inicioHoje, req.mid, inicioMes]),
     ]);
     res.json({ total_a_receber: s.total, clientes_devendo: dev.n, fiado_no_mes: mes.fiado, recebido_no_mes: mes.recebido, recebido_hoje: mes.recebido_hoje });
+  });
+
+  // números das "bolinhas" das abas do painel, numa chamada só e leve
+  api.get('/contadores', async (req, res) => {
+    const [comp, cont, notif, val] = await Promise.all([
+      db.get("SELECT COUNT(*) AS n FROM pagamentos_informados WHERE mercado_id=? AND status='pendente'", [req.mid]),
+      db.get('SELECT COUNT(*) AS n FROM contestacoes WHERE mercado_id=? AND resolvida=0', [req.mid]),
+      db.get("SELECT COUNT(*) AS n FROM notificacoes WHERE mercado_id=? AND status IN ('pendente','erro')", [req.mid]),
+      db.get(`SELECT COUNT(*) AS n FROM entradas e JOIN produtos p ON p.id=e.produto_id
+        WHERE e.mercado_id=? AND e.baixado=0 AND e.validade <= to_char(?::date + p.alerta_dias, 'YYYY-MM-DD')`, [req.mid, U.hojeISO()]),
+    ]);
+    res.json({ comprovantes: comp.n, avisos: cont.n + notif.n, validade: val.n });
   });
 
   api.get('/relatorios', soDono, async (req, res) => {
@@ -41,8 +55,9 @@ module.exports = function registraRelatorios({ api, db, audita, soDono }) {
         WHERE l.mercado_id=? AND l.cliente_id IN (SELECT cliente_id FROM lancamentos WHERE mercado_id=? GROUP BY cliente_id HAVING SUM(valor)>0)
         ORDER BY l.cliente_id, l.id`, [req.mid, req.mid]),
       db.all('SELECT id,nome,telefone,ativo FROM clientes WHERE mercado_id=?', [req.mid]),
-      db.all(`SELECT COALESCE(forma,'não informado') AS forma, -SUM(valor) AS total, COUNT(*) AS n FROM lancamentos
-        WHERE mercado_id=? AND tipo='pagamento' AND criado_em >= ? GROUP BY 1 ORDER BY 2 DESC`, [req.mid, U.inicioMesUTC()]),
+      db.all(`SELECT COALESCE(l.forma,'não informado') AS forma, -SUM(l.valor) AS total, COUNT(*) AS n
+        FROM lancamentos l LEFT JOIN lancamentos e ON e.estorno_de=l.id
+        WHERE l.mercado_id=? AND l.tipo='pagamento' AND l.criado_em >= ? AND e.id IS NULL GROUP BY 1 ORDER BY 2 DESC`, [req.mid, U.inicioMesUTC()]),
     ]);
     const porCliente = new Map();
     for (const l of lancs) { if (!porCliente.has(l.cliente_id)) porCliente.set(l.cliente_id, []); porCliente.get(l.cliente_id).push(l); }
