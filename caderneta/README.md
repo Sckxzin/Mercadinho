@@ -8,10 +8,11 @@ alertas de validade e cobrança por WhatsApp.
 npm install
 npm run seed     # demonstração: dono demo@demo.com / demo12345 · caixa caixa@demo.com / caixa12345
 npm start        # http://localhost:3000  (painel)
-npm test         # 106 verificações ponta a ponta
+npm test         # 122 verificações ponta a ponta
 npm run lint     # verificação de código
 npm run alertas  # rotina diária: validade, lembretes de vencimento e fila de cobranças (agendar via cron)
 npm run redefinir-senha -- email@exemplo.com NovaSenha123   # para quem esqueceu a senha
+npm run criar-admin -- seu@email.com SenhaForte123 "Seu Nome"   # seu acesso ao painel /admin
 ```
 Testar contra um Postgres de verdade (o banco de teste é apagado): `TEST_DATABASE_URL=postgres://... npm test`.
 Os testes rodam sozinhos no GitHub a cada envio (`.github/workflows/ci.yml`), no banco embutido e num Postgres 16.
@@ -42,6 +43,17 @@ Variáveis: `PORT`, `DATABASE_URL`, `APP_SECRET` (obrigatório em produção), `
 - Segurança: ninguém vê dívida só por saber o telefone (precisa do código do balcão); PIN guardado com scrypt; limite de tentativas por IP e por telefone; o cliente só entra pelo endereço do próprio mercado.
 - O link pessoal `/c/<token>` continua existindo. "Gerar novo link" também derruba as sessões abertas do app daquele cliente.
 - Para virar app de loja (Play Store/App Store) depois: dá para empacotar este PWA (ex.: Capacitor/TWA) sem refazer nada.
+
+## Painel do administrador (v0.6) — `/admin`
+O seu painel, como dono da plataforma, com login próprio (separado dos mercados):
+- **Visão geral:** total a receber em todos os mercados, fiado e recebido no mês, mercados ativos e os que usam de verdade (lançaram na semana), pessoas com acesso, clientes, comprovantes aguardando e **alertas** (mercados parados há 14+ dias, cadastro aberto, sistema sem APP_SECRET).
+- **Mercados:** busca, números de cada um, equipe, histórico de ações. Você pode **criar mercado** para um cliente novo, **suspender** (ex.: mensalidade em aberto; a equipe vê o motivo e o app dos clientes fica indisponível, sem apagar nada) e **reativar**, renomear, redefinir senha, desconectar ou desativar qualquer pessoa da equipe.
+- **Registro de ações:** tudo o que os administradores fizeram.
+- **Sistema:** saúde (versão, banco, tempo de resposta, migrações, memória), abrir/fechar o **cadastro público**, outros administradores e sua senha.
+- **Privacidade (LGPD):** o admin vê números e equipes, não a lista de clientes nem as compras de cada mercado.
+- **Segurança:** sessão de 12 h que fecha com o navegador, senha de no mínimo 10 caracteres, bloqueio após 5 tentativas erradas.
+
+Primeiro acesso: `npm run criar-admin -- seu@email.com SenhaForte123 "Seu Nome"` (com a `DATABASE_URL` de produção) **ou** defina `ADMIN_EMAIL` e `ADMIN_SENHA` no Railway: o primeiro admin é criado sozinho na subida (apague `ADMIN_SENHA` depois).
 
 ## v0.5 — mais seguro e mais fluido
 **Correções**

@@ -41,7 +41,7 @@ function createApp(db) {
   const saldoDe = async (clienteId, t = db) => (await t.get('SELECT COALESCE(SUM(valor),0) AS s FROM lancamentos WHERE cliente_id=?', [clienteId])).s;
   const porToken = async (token) => {
     if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return null;
-    return db.get('SELECT c.*, m.nome AS mercado_nome, m.slug AS mercado_slug, m.pix_chave, m.whatsapp AS mercado_whatsapp, m.mostrar_itens FROM clientes c JOIN mercados m ON m.id=c.mercado_id WHERE c.token=? AND c.ativo=1', [token]);
+    return db.get('SELECT c.*, m.nome AS mercado_nome, m.slug AS mercado_slug, m.pix_chave, m.whatsapp AS mercado_whatsapp, m.mostrar_itens FROM clientes c JOIN mercados m ON m.id=c.mercado_id WHERE c.token=? AND c.ativo=1 AND m.ativo=1', [token]);
   };
   // registro de auditoria (quem fez o quê). Nunca derruba a operação principal.
   const audita = async (req, acao, detalhe = null, t = db) => {
@@ -75,6 +75,7 @@ function createApp(db) {
     res.json({ ok: true });
   });
 
+  require('./rotas/admin')(ctx); // antes de montar /api (que exige login de mercado)
   require('./rotas/clientes')(ctx);
   require('./rotas/estoque')(ctx);
   require('./rotas/relatorios')(ctx);
@@ -86,6 +87,7 @@ function createApp(db) {
   const PUB = path.join(__dirname, '..', 'public');
   app.get('/c/:token', (req, res) => res.set('Cache-Control', 'no-store').sendFile(path.join(PUB, 'cliente.html')));
   app.get('/painel', (req, res) => res.set('Cache-Control', 'no-cache').sendFile(path.join(PUB, 'painel.html')));
+  app.get('/admin', (req, res) => res.set('Cache-Control', 'no-cache').sendFile(path.join(PUB, 'admin.html')));
   app.get('/', (req, res) => res.redirect('/painel'));
 
   // 404 de API e erros
@@ -106,6 +108,8 @@ async function main() {
   if (process.env.DATABASE_URL && (!process.env.APP_SECRET || process.env.APP_SECRET.length < 24))
     throw new Error('Defina APP_SECRET (mínimo 24 caracteres aleatórios) nas variáveis do Railway antes de subir em produção.');
   const db = await open();
+  await require('./rotas/admin').adminInicial(db);
+  if (!(await db.get('SELECT 1 AS x FROM admins LIMIT 1'))) console.log('Nenhum admin ainda. Crie com: npm run criar-admin -- seu@email.com SenhaForte123 (ou defina ADMIN_EMAIL e ADMIN_SENHA).');
   const port = process.env.PORT || 3000;
   const server = createApp(db).listen(port, '0.0.0.0', () => console.log(`Caderneta rodando na porta ${port} (${process.env.DATABASE_URL ? 'Postgres' : 'banco local embutido'}, fuso ${U.TZ})`));
   const parar = () => server.close(() => db.close().finally(() => process.exit(0)));

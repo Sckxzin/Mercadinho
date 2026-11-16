@@ -16,7 +16,7 @@ async function rotinaDiaria(db, { hoje = U.hojeISO(), base = process.env.BASE_UR
   const automatico = wa.configurado(env);
   const desde = (dias) => U.inicioDiaUTC(U.addDias(hoje, -dias));
 
-  for (const m of await db.all('SELECT * FROM mercados ORDER BY id')) {
+  for (const m of await db.all('SELECT * FROM mercados WHERE ativo=1 ORDER BY id')) {
     const r = { mercado: m.nome, validade: [], filas: [], enviadas: 0, erros: 0 };
     r.validade = await db.all(`SELECT p.nome,e.quantidade,e.validade FROM entradas e JOIN produtos p ON p.id=e.produto_id
       WHERE e.mercado_id=? AND e.baixado=0 AND e.validade <= to_char(?::date + p.alerta_dias, 'YYYY-MM-DD') ORDER BY e.validade`, [m.id, hoje]);

@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const { open } = require('../src/db');
 const { createApp, addDias, hojeISO } = require('../src/server');
 const extras = require('./test-extras');
+const testaAdmin = require('./test-admin');
 
 (async () => {
   const url = process.env.TEST_DATABASE_URL;
@@ -144,6 +145,7 @@ const extras = require('./test-extras');
   assert.ok(r.body.total_a_receber >= 0 && r.body.clientes_devendo >= 0); ok('resumo do painel');
 
   await extras({ db, base, call, ok, A, B, slug });
+  await testaAdmin({ db, base, call, ok, slug });
   console.log(`\n${n} verificações passaram.`);
   server.close(); await db.close();
 })().catch((e) => { console.error('FALHOU:', e); process.exit(1); });

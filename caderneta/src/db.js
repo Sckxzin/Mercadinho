@@ -189,6 +189,40 @@ CREATE INDEX IF NOT EXISTS idx_notif_cliente ON notificacoes(cliente_id, criado_
 ALTER TABLE usuarios ENABLE ROW LEVEL SECURITY;
 ALTER TABLE auditoria ENABLE ROW LEVEL SECURITY;
 `,
+
+  // 3 — painel do administrador do sistema (você): admins, registro das ações do admin,
+  //     configurações globais e suspensão de mercados.
+  `
+CREATE TABLE IF NOT EXISTS admins (
+  id             SERIAL PRIMARY KEY,
+  nome           TEXT NOT NULL,
+  email          TEXT NOT NULL UNIQUE,
+  senha_hash     TEXT NOT NULL,
+  ativo          INTEGER NOT NULL DEFAULT 1,
+  sessao_versao  INTEGER NOT NULL DEFAULT 1,
+  ultimo_login   TEXT,
+  criado_em      TEXT NOT NULL DEFAULT ${AGORA}
+);
+CREATE TABLE IF NOT EXISTS admin_log (
+  id          SERIAL PRIMARY KEY,
+  admin_id    INTEGER,
+  acao        TEXT NOT NULL,
+  mercado_id  INTEGER,
+  detalhe     TEXT,
+  criado_em   TEXT NOT NULL DEFAULT ${AGORA}
+);
+CREATE INDEX IF NOT EXISTS idx_admin_log ON admin_log(id);
+CREATE TABLE IF NOT EXISTS config (
+  chave  TEXT PRIMARY KEY,
+  valor  TEXT
+);
+ALTER TABLE mercados ADD COLUMN IF NOT EXISTS ativo INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE mercados ADD COLUMN IF NOT EXISTS bloqueio_motivo TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultimo_login TEXT;
+ALTER TABLE admins ENABLE ROW LEVEL SECURITY;
+ALTER TABLE admin_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE config ENABLE ROW LEVEL SECURITY;
+`,
 ];
 
 const aPg = (sql) => { let i = 0; return sql.replace(/\?/g, () => `$${++i}`); };
