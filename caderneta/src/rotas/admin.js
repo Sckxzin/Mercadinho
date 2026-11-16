@@ -19,13 +19,28 @@ async function registroAberto(db) {
   return process.env.REGISTRO_ABERTO !== 'false';
 }
 
-// cria o primeiro admin a partir de ADMIN_EMAIL / ADMIN_SENHA (só se ainda não existir nenhum)
+// Cria o primeiro admin a partir de ADMIN_EMAIL / ADMIN_SENHA (só se ainda não existir nenhum).
+// Tolera espaços e aspas coladas junto no valor da variável. Guarda o motivo quando não
+// consegue, para a tela de login do /admin explicar o que falta (em vez de "senha inválida").
+const limpa = (v) => String(v ?? '').trim().replace(/^(['"])(.*)\1$/, '$2').trim();
+let motivoSemAdmin = null;
 async function adminInicial(db, env = process.env) {
-  if (!env.ADMIN_EMAIL || !env.ADMIN_SENHA) return false;
-  if (await db.get('SELECT 1 AS x FROM admins LIMIT 1')) return false;
-  if (env.ADMIN_SENHA.length < 10) { console.warn('ADMIN_SENHA precisa de pelo menos 10 caracteres. Admin não criado.'); return false; }
-  await db.run('INSERT INTO admins (nome,email,senha_hash) VALUES (?,?,?)', ['Administrador', env.ADMIN_EMAIL.trim().toLowerCase(), U.hashSenha(env.ADMIN_SENHA)]);
-  console.log(`Admin criado: ${env.ADMIN_EMAIL}`);
+  if (await db.get('SELECT 1 AS x FROM admins LIMIT 1')) { motivoSemAdmin = null; return false; }
+  const email = limpa(env.ADMIN_EMAIL).toLowerCase(), senha = limpa(env.ADMIN_SENHA);
+  motivoSemAdmin = !email && !senha ? 'sem_variaveis' : !email ? 'sem_email' : !senha ? 'sem_senha'
+    : !emailValido(email) ? 'email_invalido' : senha.length < 10 ? 'senha_curta' : null;
+  if (motivoSemAdmin) {
+    if (motivoSemAdmin !== 'sem_variaveis') console.warn(`Admin não criado (${motivoSemAdmin}). Confira ADMIN_EMAIL e ADMIN_SENHA (mín. 10 caracteres).`);
+    return false;
+  }
+  try {
+    await db.run('INSERT INTO admins (nome,email,senha_hash) VALUES (?,?,?)', ['Administrador', email, U.hashSenha(senha)]);
+  } catch (e) {
+    if (e.code === '23505') return false; // outra instância criou ao mesmo tempo
+    throw e;
+  }
+  await db.run('INSERT INTO admin_log (acao,detalhe) VALUES (?,?)', ['admin.criado_variaveis', email]);
+  console.log(`Admin criado pelas variáveis: ${email}`);
   return true;
 }
 
@@ -35,8 +50,17 @@ module.exports = function registraAdmin({ app, db }) {
     db.run('INSERT INTO admin_log (admin_id,acao,mercado_id,detalhe) VALUES (?,?,?,?)', [req.admin?.id ?? null, acao, mercado_id, detalhe ? String(detalhe).slice(0, 500) : null]);
   const inicio = Date.now();
 
+  // ---------- estado (público): diz à tela de login se já existe admin e, se não, o que falta ----------
+  app.get('/api/admin/estado', async (req, res) => {
+    if (!U.limite('adm-estado:' + req.ip, 30, 60_000)) return res.status(429).json({ erro: 'Muitas requisições.' });
+    await adminInicial(db); // tenta de novo (ex.: variáveis corrigidas)
+    const tem = !!(await db.get('SELECT 1 AS x FROM admins WHERE ativo=1 LIMIT 1'));
+    res.set('Cache-Control', 'no-store').json({ tem_admin: tem, motivo: tem ? null : motivoSemAdmin });
+  });
+
   // ---------- login ----------
   app.post('/api/admin/login', async (req, res) => {
+    await adminInicial(db);
     const em = String(req.body?.email || '').trim().toLowerCase();
     if (!U.limite('adm-login:' + req.ip, 5, 15 * 60_000) || !U.limite('adm-login-em:' + em, 10, 60 * 60_000))
       return res.status(429).json({ erro: 'Muitas tentativas. Aguarde 15 minutos.' });

@@ -6,10 +6,20 @@ module.exports = async function testaAdmin({ db, base, call, ok, slug }) {
   console.log('\n  — painel do administrador —');
   const get = (p, t) => call('GET', p, null, t), post = (p, b, t) => call('POST', p, b || {}, t), patch = (p, b, t) => call('PATCH', p, b, t);
 
+  let est = await get('/api/admin/estado'); assert.equal(est.body.tem_admin, false);
+  assert.equal(await adminInicial(db, { ADMIN_EMAIL: 'root@x.com', ADMIN_SENHA: '123' }), false);
+  est = await get('/api/admin/estado'); assert.equal(est.body.motivo, 'sem_variaveis'); // a rota usa as variáveis reais (vazias aqui)
+  for (const [env, motivo] of [[{ ADMIN_SENHA: 'senha-longa-ok' }, 'sem_email'], [{ ADMIN_EMAIL: 'x@x.com' }, 'sem_senha'], [{ ADMIN_EMAIL: 'nao-email', ADMIN_SENHA: 'senha-longa-ok' }, 'email_invalido'], [{ ADMIN_EMAIL: 'x@x.com', ADMIN_SENHA: 'curta' }, 'senha_curta']]) {
+    process.env.ADMIN_EMAIL = env.ADMIN_EMAIL || ''; process.env.ADMIN_SENHA = env.ADMIN_SENHA || '';
+    assert.equal((await get('/api/admin/estado')).body.motivo, motivo, motivo);
+  }
+  delete process.env.ADMIN_EMAIL; delete process.env.ADMIN_SENHA;
+  ok('tela do /admin explica por que o admin não foi criado (variável faltando, email inválido, senha curta)');
   assert.equal(await adminInicial(db, {}), false);
   assert.equal(await adminInicial(db, { ADMIN_EMAIL: 'root@x.com', ADMIN_SENHA: 'curta' }), false);
-  assert.equal(await adminInicial(db, { ADMIN_EMAIL: 'Root@X.com', ADMIN_SENHA: 'senha-admin-forte' }), true);
-  assert.equal(await adminInicial(db, { ADMIN_EMAIL: 'outro@x.com', ADMIN_SENHA: 'senha-admin-forte' }), false); ok('primeiro admin criado pelas variáveis (só uma vez, senha forte)');
+  assert.equal(await adminInicial(db, { ADMIN_EMAIL: ' "Root@X.com" ', ADMIN_SENHA: '  "senha-admin-forte"\n' }), true); // aspas e espaços colados junto
+  assert.equal((await get('/api/admin/estado')).body.tem_admin, true);
+  assert.equal(await adminInicial(db, { ADMIN_EMAIL: 'outro@x.com', ADMIN_SENHA: 'senha-admin-forte' }), false); ok('primeiro admin criado pelas variáveis (ignora aspas/espaços; só uma vez)');
 
   assert.equal((await post('/api/admin/login', { email: 'root@x.com', senha: 'errada-errada' })).status, 401);
   let r = await post('/api/admin/login', { email: 'root@x.com', senha: 'senha-admin-forte' }); assert.equal(r.status, 200); const ADM = r.body.token; ok('login do admin');

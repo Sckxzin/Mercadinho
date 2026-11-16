@@ -100,6 +100,24 @@ function login(msg) {
     catch (x) { $('#lerr').textContent = x.message; b.classList.remove('carregando'); b.disabled = false }
   };
   setTimeout(() => $('#em').focus(), 50);
+  diagnostico();
+}
+// se ainda não existe admin, explica exatamente o que falta (em vez de "senha inválida")
+const MOTIVO = {
+  sem_variaveis: 'O servidor não está vendo as variáveis <b>ADMIN_EMAIL</b> e <b>ADMIN_SENHA</b>. Confira se estão no serviço do <b>site</b> (não no da rotina diária), com esses nomes exatos, e se o Railway terminou de reiniciar (aba Deployments).',
+  sem_email: 'Falta a variável <b>ADMIN_EMAIL</b> (ou o nome está diferente).',
+  sem_senha: 'Falta a variável <b>ADMIN_SENHA</b> (ou o nome está diferente).',
+  email_invalido: 'O valor de <b>ADMIN_EMAIL</b> não parece um email válido.',
+  senha_curta: 'A <b>ADMIN_SENHA</b> tem menos de 10 caracteres. Use uma senha maior e aguarde o Railway reiniciar.',
+};
+async function diagnostico() {
+  try {
+    const r = await (await fetch('/api/admin/estado')).json();
+    if (r.tem_admin || !$('#fl')) return;
+    $('#fl').insertAdjacentHTML('beforebegin', `<div class="card" style="border-color:rgba(251,191,36,.45);margin-bottom:12px"><b>Nenhum administrador criado ainda</b>
+      <p class="muted small" style="line-height:1.6;margin:8px 0 0">${MOTIVO[r.motivo] || MOTIVO.sem_variaveis}</p>
+      <p class="muted small" style="line-height:1.6;margin:8px 0 0">Depois de corrigir, recarregue esta página. Alternativa: <code>npm run criar-admin</code> no terminal.</p></div>`);
+  } catch {}
 }
 function sair(msg) { S.tk = null; loc.set('adm', null); $$('.ov').forEach(o => o.remove()); document.body.classList.remove('travado'); history.replaceState(null, '', '/admin'); login(msg) }
 
