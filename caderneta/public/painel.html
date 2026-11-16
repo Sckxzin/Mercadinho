@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#070d1a">
+<title>Caderneta — Painel</title>
+<link rel="icon" href="/assets/icon-192.png">
+<link rel="stylesheet" href="/assets/ui.css">
+</head>
+<body>
+<div class="wrap wide" id="root"></div>
+<div id="toast"></div>
+<script>
+const $ = s => document.querySelector(s);
+const brl = c => (c/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ini = n => String(n).trim().split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase();
+const dt = d => d ? new Date(d.replace(' ','T')+'Z').toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+let T = (()=>{try{return localStorage.getItem('tk')}catch(e){return null}})(), tab='clientes', sel=null, busca='', cache={};
+
+/* ---------- utilidades de UI ---------- */
+function toast(m){ const t=$('#toast'); t.textContent=m; t.className='on'; clearTimeout(toast.t); toast.t=setTimeout(()=>t.className='',2600); }
+function modal(html){ return new Promise(res=>{ const o=document.createElement('div'); o.className='ov'; o.innerHTML=`<div class="md">${html}</div>`; document.body.appendChild(o);
+  const close=v=>{o.remove();res(v)}; o.addEventListener('mousedown',e=>{if(e.target===o)close(null)}); o._close=close; o.querySelector('[data-x]')?.addEventListener('click',()=>close(null)); o._el=o; modal.cur=o; }); }
+// formulário em janela: campos [{id,label,type,value,ph,hint,opts}] -> objeto ou null
+function form(titulo, campos, {ok='Salvar',sub=''}={}){
+  const html=`<h3>${esc(titulo)}</h3>${sub?`<div class="muted small">${sub}</div>`:''}<form id="mf">${campos.map(c=>`<label class="f" for="mf_${c.id}">${esc(c.label)}</label>`+
+    (c.type==='select'?`<select id="mf_${c.id}">${c.opts.map(o=>`<option ${o===c.value?'selected':''}>${esc(o)}</option>`).join('')}</select>`
+    :c.type==='check'?`<label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" id="mf_${c.id}" ${c.value?'checked':''}> <span class="small muted">${esc(c.ph||'')}</span></label>`
+    :`<input id="mf_${c.id}" type="${c.type||'text'}" value="${esc(c.value??'')}" placeholder="${esc(c.ph||'')}" ${c.mode?`inputmode="${c.mode}"`:''} autocomplete="off">`)+
+    (c.hint?`<div class="hint">${esc(c.hint)}</div>`:'')).join('')}
+    <div class="acts"><button type="button" class="btn sec" data-x>Cancelar</button><button class="btn">${esc(ok)}</button></div></form>`;
+  const p=modal(html); const o=modal.cur;
+  setTimeout(()=>o.querySelector('input,select')?.focus(),30);
+  o.querySelector('#mf').addEventListener('submit',e=>{e.preventDefault(); const v={}; for(const c of campos){const el=o.querySelector('#mf_'+c.id); v[c.id]=c.type==='check'?el.checked:el.value.trim();} o._close(v);});
+  return p;
+}
+function confirma(titulo,texto,{ok='Confirmar',danger=false}={}){
+  const p=modal(`<h3>${esc(titulo)}</h3><p class="muted" style="line-height:1.5">${texto}</p><div class="acts"><button class="btn sec" data-x>Cancelar</button><button class="btn ${danger?'danger':''}" id="yes">${esc(ok)}</button></div>`);
+  modal.cur.querySelector('#yes').onclick=()=>modal.cur._close(true); return p.then(v=>!!v);
+}
+function info(html){ const p=modal(html); return p; }
+
+/* ---------- API ---------- */
+async function api(path, opt={}){
+  const r = await fetch('/api'+path,{method:opt.method||'GET',headers:{'content-type':'application/json',authorization:'Bearer '+T},body:opt.body?JSON.stringify(opt.body):undefined});
+  const j = await r.json().catch(()=>({}));
+  if(r.status===401){ try{localStorage.removeItem('tk')}catch(e){} T=null; render(); throw new Error('auth'); }
+  if(!r.ok) throw Object.assign(new Error(j.erro||'Erro'),{data:j,status:r.status});
+  return j;
+}
+const run = async fn => { try{ return await fn(); }catch(e){ if(e.message!=='auth') toast(e.message); } };
+
+/* ---------- login ---------- */
+function login(){
+  $('#root').innerHTML = `<div style="max-width:400px;margin:8vh auto 0"><div class="brand" style="margin-bottom:18px"><div class="logo">C</div><div><h2>Caderneta</h2><div class="muted small">Fiado, promoções e Pix em um só lugar</div></div></div>
+  <div class="card"><label class="f">Email</label><input id="em" type="email" autocomplete="username">
+  <label class="f">Senha</label><input id="se" type="password" autocomplete="current-password">
+  <button class="btn block" style="margin-top:16px" onclick="entrar()">Entrar</button>
+  <button class="btn sec block" style="margin-top:8px" onclick="criar()">Criar conta do mercado</button></div></div>`;
+  $('#se').addEventListener('keydown',e=>{if(e.key==='Enter')entrar()});
+}
+async function entrar(){
+  const r = await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:$('#em').value,senha:$('#se').value})});
+  const j = await r.json(); if(!r.ok) return toast(j.erro);
+  T=j.token; try{localStorage.setItem('tk',T)}catch(e){} render();
+}
+async function criar(){
+  const email=$('#em').value, senha=$('#se').value;
+  const v=await form('Criar conta',[{id:'nome',label:'Nome do mercado',ph:'Ex.: Mercadinho do Zé'}],{ok:'Criar conta',sub:'Use o email e a senha (mín. 8 caracteres) digitados na tela anterior.'}); if(!v||!v.nome) return;
+  const r = await fetch('/api/registro',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({nome:v.nome,email,senha})});
+  const j = await r.json(); if(!r.ok) return toast(j.erro);
+  T=j.token; try{localStorage.setItem('tk',T)}catch(e){} render();
+}
+function sair(){ try{localStorage.removeItem('tk')}catch(e){} T=null; render(); }
+
+/* ---------- casca ---------- */
+async function render(){
+  if(!T) return login();
+  let nome='Caderneta', pend=0, avisos=0;
+  try{ const [m,pc,av]=await Promise.all([api('/mercado'),api('/pagamentos-informados?status=pendente'),api('/contestacoes')]); nome=m.nome; pend=pc.length; avisos=av.length; cache.m=m; }catch(e){ if(e.message==='auth') return; }
+  const tabs=[['clientes','Clientes'],['comprov','Comprovantes',pend],['promos','Promoções'],['validade','Validade'],['produtos','Produtos'],['avisos','Avisos',avisos],['config','Config']];
+  $('#root').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div class="brand"><div class="logo">${esc(ini(nome))}</div><div><b>${esc(nome)}</b><div class="muted tiny">Painel do mercado</div></div></div><button class="btn sec sm" onclick="sair()">Sair</button></div>
+  <div class="nav">${tabs.map(([k,n,b])=>`<button class="${tab===k?'on':''}" onclick="tab='${k}';sel=null;render()">${n}${b?`<span class="badge">${b}</span>`:''}</button>`).join('')}</div><div id="v"><div class="card"><div class="sk" style="width:60%"></div></div></div>`;
+  await run(({clientes:vClientes,comprov:vComprov,promos:vPromos,validade:vValidade,produtos:vProdutos,avisos:vAvisos,config:vConfig})[tab]);
+}
+
+/* ---------- clientes ---------- */
+async function vClientes(){
+  if(sel) return vExtrato();
+  const [r,cs] = await Promise.all([api('/resumo'),api('/clientes')]); cache.cs=cs;
+  $('#v').innerHTML = `<div class="hero"><div class="lbl">Total a receber (fiado em aberto)</div><div class="val ${r.total_a_receber>0?'bad':'ok'}">${brl(r.total_a_receber)}</div>
+    <div class="muted small" style="margin-top:6px">${r.clientes_devendo} cliente(s) devendo</div></div>
+  <div class="stat" style="margin-top:12px"><div class="card"><div class="lbl">Fiado no mês</div><div class="val">${brl(r.fiado_no_mes)}</div></div>
+    <div class="card"><div class="lbl">Recebido no mês</div><div class="val ok">${brl(r.recebido_no_mes)}</div></div></div>
+  <div class="cap">Clientes</div>
+  <div style="display:flex;gap:8px"><input id="bq" placeholder="Buscar cliente…" value="${esc(busca)}" style="flex:1"><button class="btn" onclick="novoCliente()">+ Novo</button></div>
+  <div class="card list" id="lista" style="margin-top:12px"></div>`;
+  $('#bq').oninput=e=>{busca=e.target.value;pintaLista()}; pintaLista();
+}
+function pintaLista(){
+  const q=busca.toLowerCase(), cs=(cache.cs||[]).filter(c=>c.nome.toLowerCase().includes(q));
+  $('#lista').innerHTML = cs.length? cs.map(c=>`<div class="it click" onclick="sel=${c.id};render()"><div class="av">${esc(ini(c.nome))}</div>
+    <div class="main"><div class="t">${esc(c.nome)}</div><div class="s">${esc(c.telefone||'sem telefone')}${c.ativado_em?' · <span class="ok">app ativo</span>':''}</div></div>
+    <div class="amt ${c.saldo>0?'bad':'ok'}">${brl(c.saldo)}</div></div>`).join('')
+    : `<div class="empty"><b>📒</b>${busca?'Nenhum cliente com esse nome.':'Nenhum cliente ainda. Toque em “+ Novo”.'}</div>`;
+}
+const novoCliente = () => run(async()=>{
+  const v=await form('Novo cliente',[{id:'nome',label:'Nome',ph:'Ex.: Dona Maria'},{id:'telefone',label:'WhatsApp (com DDD)',ph:'81 99999-9999',type:'tel',mode:'tel'},{id:'limite',label:'Limite de fiado (R$)',value:'0',mode:'decimal',hint:'0 = sem limite'},{id:'aceitou',label:'Aviso de privacidade (LGPD)',type:'check',ph:'O cliente foi avisado que a conta dele pode ser consultada pelo app e concordou'}],{ok:'Cadastrar'});
+  if(!v||!v.nome) return; await api('/clientes',{method:'POST',body:v}); toast('Cliente cadastrado'); render();
+});
+async function vExtrato(){
+  const e = await api(`/clientes/${sel}/extrato`); const c=e.cliente; cache.e=e;
+  $('#v').innerHTML = `<button class="btn link" onclick="sel=null;render()">← Voltar</button>
+  <div class="hero" style="margin-top:6px"><div style="display:flex;gap:12px;align-items:center"><div class="av" style="width:46px;height:46px">${esc(ini(c.nome))}</div><div><b style="font-size:18px">${esc(c.nome)}</b><div class="muted small">${esc(c.telefone||'sem telefone')}${c.limite?` · limite ${brl(c.limite)}`:''}</div></div></div>
+    <div class="val ${e.saldo>0?'bad':'ok'}" style="margin-top:14px">${brl(e.saldo)}</div><div class="lbl">${e.saldo>0?'deve ao mercado':(e.saldo<0?'crédito do cliente':'conta em dia')}</div></div>
+  <div class="row-btns" style="margin-top:12px"><button class="btn" onclick="compra()">+ Compra fiada</button><button class="btn good" onclick="pagto()">Receber pagamento</button>
+    <button class="btn sec" onclick="cobrar()">Cobrar no WhatsApp</button><button class="btn sec" onclick="codigoApp()">${c.ativado_em?'Redefinir acesso ao app':'Convidar para o app'}</button></div>
+  <div class="card" style="margin-top:12px"><div class="muted small">Link pessoal do cliente</div><div class="row-btns" style="margin-top:8px"><a class="btn sec sm" target="_blank" href="${esc(c.url)}">abrir</a>
+    <button class="btn sec sm" onclick="copia('${esc(c.url)}')">copiar</button><button class="btn sec sm" onclick="novoLink()">gerar novo link</button><button class="btn sec sm" onclick="editaCliente()">editar</button></div></div>
+  <div class="cap">Histórico</div><div class="card list">${e.lancamentos.map(l=>`<div class="it"><div class="main"><div class="t">${{compra:'Compra fiada',pagamento:'Pagamento',ajuste:'Ajuste'}[l.tipo]} ${l.contestado?'<span class="chip bad">contestado</span>':''}</div>
+    <div class="s">${dt(l.criado_em)}${l.descricao?' · '+esc(l.descricao):''}${l.forma?' · '+esc(l.forma):''}</div></div>
+    <div style="text-align:right"><div class="amt ${l.valor<0?'ok':'bad'}">${brl(l.valor)}</div><button class="btn link" onclick="estorna(${l.id})">estornar</button></div></div>`).join('')||'<div class="empty"><b>🧾</b>Sem lançamentos.</div>'}</div>`;
+}
+const copia = t => navigator.clipboard.writeText(t).then(()=>toast('Copiado ✓'));
+const compra = () => run(async()=>{
+  const v=await form('Compra fiada',[{id:'valor',label:'Valor (R$)',mode:'decimal',ph:'0,00'},{id:'descricao',label:'Itens (opcional)',ph:'arroz, feijão…'}],{ok:'Lançar'}); if(!v||!v.valor) return;
+  try{ await api(`/clientes/${sel}/compras`,{method:'POST',body:v}); }
+  catch(e){ if(e.data?.codigo==='LIMITE'){ if(await confirma('Passa do limite',esc(e.message)+'<br>Lançar mesmo assim?',{ok:'Lançar mesmo assim'})) await api(`/clientes/${sel}/compras`,{method:'POST',body:{...v,forcar:true}}); else return; } else throw e; }
+  toast('Compra lançada'); render();
+});
+const pagto = () => run(async()=>{
+  const v=await form('Receber pagamento',[{id:'valor',label:'Valor recebido (R$)',mode:'decimal'},{id:'forma',label:'Forma',type:'select',opts:['pix','dinheiro','cartão'],value:'pix'}],{ok:'Registrar'}); if(!v||!v.valor) return;
+  await api(`/clientes/${sel}/pagamentos`,{method:'POST',body:v}); toast('Pagamento registrado'); render();
+});
+const estorna = id => run(async()=>{
+  const v=await form('Estornar lançamento',[{id:'motivo',label:'Motivo',ph:'Ex.: valor digitado errado'}],{ok:'Estornar',sub:'Cria um lançamento inverso. O histórico não é apagado.'}); if(!v) return;
+  await api(`/lancamentos/${id}/estornar`,{method:'POST',body:v}); toast('Estornado'); render();
+});
+const cobrar = () => run(async()=>{ const r=await api(`/clientes/${sel}/cobrar`,{method:'POST'}); window.open(r.link_wa,'_blank'); });
+const novoLink = () => run(async()=>{ if(!await confirma('Gerar novo link','O link antigo (e o login do app deste cliente neste aparelho) deixa de funcionar.',{ok:'Gerar',danger:true})) return;
+  const r=await api(`/clientes/${sel}/novo-link`,{method:'POST'}); await info(`<h3>Novo link</h3><p class="muted small" style="word-break:break-all">${esc(r.url)}</p><div class="acts"><button class="btn" onclick="copia('${esc(r.url)}')">Copiar</button><button class="btn sec" data-x>Fechar</button></div>`); render(); });
+const editaCliente = () => run(async()=>{ const c=cache.e.cliente;
+  const v=await form('Editar cliente',[{id:'nome',label:'Nome',value:c.nome},{id:'telefone',label:'WhatsApp (com DDD)',value:c.telefone||'',mode:'tel'},{id:'limite',label:'Limite de fiado (R$)',value:(c.limite/100).toFixed(2).replace('.',','),mode:'decimal'}]); if(!v) return;
+  await api(`/clientes/${sel}`,{method:'PATCH',body:v}); toast('Salvo'); render(); });
+const codigoApp = () => run(async()=>{
+  const r=await api(`/clientes/${sel}/codigo-acesso`,{method:'POST'});
+  window.__convite=r;
+  await info(`<h3>Convite para o app</h3><p class="muted small">Passe este código ao cliente. Ele vale 7 dias e só funciona uma vez.</p><div class="code">${esc(r.codigo)}</div>
+   <div class="hint" style="text-align:center">Endereço: ${esc(r.url_app)}</div><div class="acts" style="flex-direction:column"><button class="btn good" onclick="window.open(window.__convite.link_wa,'_blank')">Enviar convite pelo WhatsApp</button><button class="btn sec" onclick="copia('${esc(r.codigo)}')">Copiar código</button><button class="btn sec" data-x>Fechar</button></div>`);
+});
+
+/* ---------- comprovantes ---------- */
+async function vComprov(){
+  const [pend,hist] = await Promise.all([api('/pagamentos-informados?status=pendente'),api('/pagamentos-informados?status=confirmado')]);
+  $('#v').innerHTML = `<div class="cap" style="margin-top:4px">Aguardando conferência (${pend.length})</div><div class="card list">
+  ${pend.map(p=>`<div class="it"><div class="main"><div class="t">${esc(p.cliente_nome)}</div><div class="s">${dt(p.criado_em)} · informou <b class="ok">${brl(p.valor)}</b></div></div>
+    <div class="row-btns"><button class="btn sec sm" onclick="verComp(${p.id})">Ver</button><button class="btn good sm" onclick="confirma2(${p.id},${p.valor})">Confirmar</button><button class="btn danger sm" onclick="recusa(${p.id})">Recusar</button></div></div>`).join('')||'<div class="empty"><b>✅</b>Nada pendente.</div>'}</div>
+  <div class="cap">Confirmados recentemente</div><div class="card list">${hist.slice(0,15).map(p=>`<div class="it"><div class="main"><div class="t">${esc(p.cliente_nome)}</div><div class="s">${dt(p.resolvido_em)}</div></div><div class="amt ok">${brl(p.valor)}</div></div>`).join('')||'<div class="empty">Nenhum ainda.</div>'}</div>`;
+}
+const verComp = id => run(async()=>{
+  const r = await fetch(`/api/pagamentos-informados/${id}/comprovante`,{headers:{authorization:'Bearer '+T}}); if(!r.ok) return toast('Sem comprovante');
+  const url=URL.createObjectURL(await r.blob()); info(`<h3>Comprovante</h3><img src="${url}" style="width:100%;border-radius:12px;margin-top:10px"><div class="acts"><button class="btn sec" data-x>Fechar</button></div>`);
+});
+const confirma2 = (id,valor) => run(async()=>{
+  const v=await form('Confirmar pagamento',[{id:'valor',label:'Valor a abater (R$)',value:(valor/100).toFixed(2).replace('.',','),mode:'decimal',hint:'Confira no app do banco. Corrija se o cliente digitou errado.'}],{ok:'Confirmar e abater'}); if(!v) return;
+  await api(`/pagamentos-informados/${id}/confirmar`,{method:'POST',body:v}); toast('Pagamento confirmado'); render();
+});
+const recusa = id => run(async()=>{
+  const v=await form('Recusar comprovante',[{id:'motivo',label:'Motivo (o cliente verá)',value:'Pagamento não encontrado'}],{ok:'Recusar'}); if(!v) return;
+  await api(`/pagamentos-informados/${id}/recusar`,{method:'POST',body:v}); toast('Recusado'); render();
+});
+
+/* ---------- promoções ---------- */
+async function vPromos(){
+  const ps = await api('/promocoes');
+  $('#v').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><div class="cap" style="margin:4px 2px">Promoções</div><button class="btn" onclick="novaPromo()">+ Nova</button></div>
+  <div class="card list">${ps.map(p=>`<div class="it"><div class="main"><div class="t">${esc(p.titulo)} ${p.ativo?'':'<span class="chip">pausada</span>'}</div>
+  <div class="s">${p.preco!=null?`<b class="ok">${brl(p.preco)}</b>`:''}${p.preco_original?` <s>${brl(p.preco_original)}</s>`:''}${p.validade?` · até ${p.validade.split('-').reverse().join('/')}`:''}</div></div>
+  <button class="btn sec sm" onclick="togglePromo(${p.id},${p.ativo?0:1})">${p.ativo?'Pausar':'Ativar'}</button></div>`).join('')||'<div class="empty"><b>🏷️</b>Nenhuma promoção. Os clientes veem as ativas no app.</div>'}</div>`;
+}
+const novaPromo = () => run(async()=>{
+  const v=await form('Nova promoção',[{id:'titulo',label:'Produto / título',ph:'Arroz 5kg'},{id:'preco',label:'Preço promocional (R$)',mode:'decimal'},{id:'preco_original',label:'Preço normal (R$, opcional)',mode:'decimal'},{id:'validade',label:'Válida até (opcional)',type:'date'},{id:'descricao',label:'Descrição (opcional)',ph:'Só até acabar o estoque'}],{ok:'Publicar'});
+  if(!v||!v.titulo) return; await api('/promocoes',{method:'POST',body:v}); toast('Promoção publicada'); render();
+});
+const togglePromo = (id,ativo) => run(async()=>{ await api(`/promocoes/${id}`,{method:'PATCH',body:{ativo}}); render(); });
+
+/* ---------- validade / produtos ---------- */
+async function vValidade(){
+  const a = await api('/alertas/validade');
+  const li = (x,cls)=>`<div class="it"><div class="main"><div class="t">${esc(x.nome)} <span class="muted small">×${x.quantidade}</span></div><div class="s">vence ${x.validade.split('-').reverse().join('/')}</div></div>
+    <span class="chip ${cls}">${x.dias_restantes<0?`venceu há ${-x.dias_restantes}d`:(x.dias_restantes===0?'vence HOJE':`em ${x.dias_restantes}d`)}</span><button class="btn sec sm" onclick="baixa(${x.entrada_id})">Dar baixa</button></div>`;
+  $('#v').innerHTML = `<div class="cap" style="margin-top:4px">Vencidos (${a.vencidos.length})</div><div class="card list">${a.vencidos.map(x=>li(x,'bad')).join('')||'<div class="empty"><b>🎉</b>Nenhum vencido.</div>'}</div>
+  <div class="cap">Vencendo em breve (${a.vencendo.length})</div><div class="card list">${a.vencendo.map(x=>li(x,'amb')).join('')||'<div class="empty">Nada vencendo.</div>'}</div>`;
+}
+const baixa = id => run(async()=>{ await api(`/entradas/${id}/baixar`,{method:'POST'}); toast('Baixa registrada'); render(); });
+async function vProdutos(){
+  const ps = await api('/produtos');
+  $('#v').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><div class="cap" style="margin:4px 2px">Produtos</div><button class="btn" onclick="novoProd()">+ Novo</button></div>
+  <div class="card list">${ps.map(p=>`<div class="it"><div class="main"><div class="t">${esc(p.nome)}</div><div class="s">em estoque: ${p.em_estoque} · avisar ${p.alerta_dias}d antes</div></div><button class="btn sec sm" onclick="entrada(${p.id})">+ Entrada</button></div>`).join('')||'<div class="empty"><b>📦</b>Nenhum produto.</div>'}</div>`;
+}
+const novoProd = () => run(async()=>{ const v=await form('Novo produto',[{id:'nome',label:'Nome'},{id:'alerta_dias',label:'Avisar quantos dias antes de vencer?',value:'7',mode:'numeric'}]); if(!v||!v.nome) return; await api('/produtos',{method:'POST',body:v}); render(); });
+const entrada = id => run(async()=>{ const v=await form('Entrada de mercadoria',[{id:'quantidade',label:'Quantidade',mode:'numeric'},{id:'validade',label:'Validade',type:'date'}],{ok:'Registrar'}); if(!v||!v.quantidade||!v.validade) return;
+  await api(`/produtos/${id}/entradas`,{method:'POST',body:{quantidade:Number(v.quantidade),validade:v.validade}}); toast('Entrada registrada'); render(); });
+
+/* ---------- avisos / config ---------- */
+async function vAvisos(){
+  const k = await api('/contestacoes');
+  $('#v').innerHTML = `<div class="cap" style="margin-top:4px">Clientes que avisaram “tem algo errado”</div><div class="card list">${k.map(x=>`<div class="it"><div class="main"><div class="t">${esc(x.cliente_nome)} ${x.lancamento_id?`<span class="chip">lançamento #${x.lancamento_id}</span>`:''}</div><div class="s">${esc(x.mensagem||'(sem mensagem)')}</div></div><button class="btn good sm" onclick="resolve(${x.id})">Resolvido</button></div>`).join('')||'<div class="empty"><b>👍</b>Nenhum aviso.</div>'}</div>`;
+}
+const resolve = id => run(async()=>{ await api(`/contestacoes/${id}/resolver`,{method:'POST'}); render(); });
+async function vConfig(){
+  const m = await api('/mercado'); const url=location.origin+'/m/'+m.slug;
+  $('#v').innerHTML = `<div class="card"><h3>Dados do mercado</h3><label class="f">Nome</label><input id="cn" value="${esc(m.nome)}"><label class="f">Chave Pix</label><input id="cp" value="${esc(m.pix_chave||'')}" placeholder="CPF, CNPJ, email, telefone ou aleatória">
+  <label class="f">Cidade (aparece no Pix)</label><input id="cc" value="${esc(m.cidade||'')}"><label class="f">WhatsApp do mercado</label><input id="cw" value="${esc(m.whatsapp||'')}">
+  <label style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" id="ci" ${m.mostrar_itens?'checked':''}> <span class="small muted">Mostrar o detalhe dos itens na conta do cliente</span></label>
+  <button class="btn block" style="margin-top:16px" onclick="salvaCfg()">Salvar</button></div>
+  <div class="card"><h3>App do cliente</h3><p class="muted small">Endereço fixo do seu mercado. Imprima o QR code e cole no balcão.</p><div style="word-break:break-all;font-weight:700">${esc(url)}</div>
+  <div class="row-btns" style="margin-top:10px"><button class="btn sec sm" onclick="copia('${esc(url)}')">Copiar endereço</button><button class="btn sec sm" onclick="verQr()">Ver QR code</button></div><div id="qrbox" style="margin-top:12px"></div></div>`;
+}
+const salvaCfg = () => run(async()=>{ await api('/mercado',{method:'PATCH',body:{nome:$('#cn').value,pix_chave:$('#cp').value,whatsapp:$('#cw').value,cidade:$('#cc').value,mostrar_itens:$('#ci').checked}}); toast('Salvo ✓'); });
+const verQr = () => run(async()=>{ const r=await fetch('/api/mercado/qr',{headers:{authorization:'Bearer '+T}}); const u=URL.createObjectURL(await r.blob());
+  $('#qrbox').innerHTML=`<div style="background:#fff;display:inline-block;padding:10px;border-radius:14px"><img src="${u}" width="240"></div><div class="hint">O cliente aponta a câmera e abre o app do mercado.</div>`; });
+render();
+</script>
+</body>
+</html>

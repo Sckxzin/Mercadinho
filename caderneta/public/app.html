@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#070d1a">
+<meta name="robots" content="noindex,nofollow">
+<link rel="manifest" id="mf">
+<link rel="apple-touch-icon" href="/assets/icon-192.png">
+<link rel="icon" href="/assets/icon-192.png">
+<title>Minha conta</title>
+<link rel="stylesheet" href="/assets/ui.css">
+</head>
+<body>
+<div class="wrap" id="app"><div class="card"><div class="sk" style="width:50%"></div><div class="sk" style="width:80%;margin-top:12px"></div></div></div>
+<div id="toast"></div>
+<script>
+const slug = location.pathname.split('/')[1]==='m' ? location.pathname.split('/')[2] : '';
+const KEY = 'cad_token_'+slug;
+const $ = s => document.querySelector(s);
+const brl = c => (c/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+document.getElementById('mf').href = `/m/${slug}/manifest.webmanifest`;
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
+// já entrou neste aparelho? vai direto para a conta
+try { const t = localStorage.getItem(KEY); if(t){ location.replace('/c/'+t); } } catch(e){}
+
+let modo = 'entrar', deferred = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; const b=$('#inst'); if(b) b.style.display='flex'; });
+
+async function load(){
+  const r = await fetch('/api/app/'+slug);
+  if(!r.ok){ $('#app').innerHTML='<div class="card" style="text-align:center;margin-top:12vh"><h2>Mercado não encontrado</h2><p class="muted">Confira o endereço ou o QR code.</p></div>'; return; }
+  const d = await r.json(); document.title = d.mercado;
+  $('#app').innerHTML = `
+    <div class="brand" style="margin:6px 0 18px"><div class="logo">${esc(d.mercado.trim()[0]||'C')}</div><div><h2 style="font-size:20px">${esc(d.mercado)}</h2><div class="muted tiny">Sua conta, promoções e Pix em um só lugar</div></div></div>
+    <div class="card">
+      <div class="tabs"><button id="t1" class="on" onclick="setModo('entrar')">Entrar</button><button id="t2" onclick="setModo('ativar')">Primeiro acesso</button></div>
+      <label class="f">Telefone (com DDD)</label><input id="tel" inputmode="tel" autocomplete="tel" placeholder="81 99999-9999">
+      <div id="cod" style="display:none"><label class="f">Código que o mercado te passou</label><input id="codigo" inputmode="numeric" maxlength="6" placeholder="6 dígitos"></div>
+      <label class="f" id="lpin">PIN</label><input id="pin" type="password" inputmode="numeric" maxlength="6" placeholder="4 a 6 números" autocomplete="current-password">
+      <button class="btn block" id="go" style="margin-top:16px" onclick="enviar()">Entrar</button><div id="err" class="small bad" style="min-height:18px;margin-top:10px"></div>
+      <div class="hint" id="hint">Primeira vez? Peça o código ao mercado e use “Primeiro acesso”. Esqueceu o PIN? Peça um código novo.</div>
+    </div>
+    <button id="inst" class="btn sec block" style="margin-top:12px;display:${deferred?'flex':'none'}" onclick="deferred&&deferred.prompt()">📲 Instalar como aplicativo</button>
+    ${d.promocoes.length?'<div class="cap">Promoções de hoje</div>'+d.promocoes.map(p=>`<div class="promo"><b>${esc(p.titulo)}</b>
+      ${p.preco!=null?`<div style="margin-top:4px"><span class="pr">${brl(p.preco)}</span>${p.preco_original?`<s>${brl(p.preco_original)}</s>`:''}</div>`:''}
+      ${p.descricao?`<div class="muted small" style="margin-top:2px">${esc(p.descricao)}</div>`:''}
+      ${p.validade?`<div class="amb tiny" style="margin-top:6px">até ${p.validade.split('-').reverse().join('/')}</div>`:''}</div>`).join(''):''}
+    <p class="tiny dim" style="margin-top:22px;line-height:1.6;text-align:center">Android: toque em “Instalar como aplicativo”. iPhone: Compartilhar → “Adicionar à Tela de Início”.</p>`;
+  for (const id of ['tel','pin','codigo']) $('#'+id)?.addEventListener('keydown',e=>{ if(e.key==='Enter') enviar(); });
+}
+function setModo(m){
+  modo=m; $('#t1').className=m==='entrar'?'on':''; $('#t2').className=m==='ativar'?'on':'';
+  $('#cod').style.display=m==='ativar'?'block':'none'; $('#lpin').textContent=m==='ativar'?'Crie seu PIN (4 a 6 números)':'PIN';
+  $('#go').textContent=m==='ativar'?'Ativar minha conta':'Entrar'; $('#err').textContent='';
+  $('#pin').autocomplete = m==='ativar'?'new-password':'current-password';
+}
+async function enviar(){
+  const body = {telefone:$('#tel').value, pin:$('#pin').value}; if(modo==='ativar') body.codigo=$('#codigo').value;
+  $('#go').disabled=true; $('#err').textContent='';
+  try{
+    const r = await fetch(`/api/app/${slug}/${modo}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+    const j = await r.json(); if(!r.ok) throw new Error(j.erro||'Erro');
+    try{ localStorage.setItem(KEY,j.token); }catch(e){}
+    location.href = '/c/'+j.token;
+  }catch(e){ $('#err').textContent=e.message; $('#go').disabled=false; }
+}
+load();
+</script>
+</body>
+</html>

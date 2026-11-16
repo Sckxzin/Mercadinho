@@ -1,0 +1,21 @@
+{
+  "name": "caderneta",
+  "version": "0.4.0",
+  "description": "Caderneta digital para mercadinhos: fiado, pagamentos, validade e página do cliente",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "seed": "node scripts/seed.js",
+    "test": "node scripts/test.js",
+    "alertas": "node scripts/rotina-diaria.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.16",
+    "express": "^4.19.2",
+    "pg": "^8.23.1",
+    "qrcode": "^1.5.4"
+  }
+}
