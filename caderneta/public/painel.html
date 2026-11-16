@@ -8,7 +8,7 @@
 <title>Caderneta — Painel</title>
 <link rel="icon" href="/assets/icon-192.png">
 <link rel="apple-touch-icon" href="/assets/icon-192.png">
-<link rel="stylesheet" href="/assets/ui.css?v=5">
+<link rel="stylesheet" href="/assets/ui.css?v=6">
 </head>
 <body>
 <div id="offline" role="status">Sem internet. As alterações não serão salvas até a conexão voltar.</div>
@@ -21,7 +21,7 @@ const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [..
 const brl = c => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const reais = c => (c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ini = n => String(n || '?').trim().split(/\s+/).slice(0, 2).map(x => x[0]).join('').toUpperCase();
+const ini = n => String(n || '?').trim().split(/\s+/).filter(x => /^\p{L}/u.test(x)).slice(0, 2).map(x => x[0]).join('').toUpperCase() || '?';
 const utc = d => new Date(String(d).replace(' ', 'T') + 'Z');
 const dt = d => d ? utc(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
 const dataBR = iso => iso ? iso.split('-').reverse().join('/') : '';
@@ -40,7 +40,7 @@ async function api(path, { method = 'GET', body, raw } = {}) {
   try {
     r = await fetch('/api' + path, { method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), authorization: 'Bearer ' + S.tk }, body: body ? JSON.stringify(body) : undefined });
   } catch { throw new Error('Sem conexão com o servidor. Verifique a internet.') }
-  if (r.status === 401) { sairLocal('Sua sessão terminou. Entre novamente.'); throw new Error('auth') }
+  if (r.status === 401) { const j = await r.json().catch(() => ({})); sairLocal(j.erro || 'Sua sessão terminou. Entre novamente.'); throw new Error('auth') }
   if (raw) { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erro || 'Erro'); return r }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(j.erro || 'Erro'), { data: j, status: r.status });

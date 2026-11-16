@@ -9,7 +9,7 @@ const { normTel } = U;
 const MSG_FALHA = 'Telefone ou PIN inválido. Se for seu primeiro acesso, peça o código ao mercado.';
 
 module.exports = function registraApp({ app, api, db, baseUrl, audita }) {
-  const mercadoPorSlug = async (slug) => (/^[a-z0-9-]{3,50}$/.test(slug) ? db.get('SELECT id,nome,slug,whatsapp FROM mercados WHERE slug=?', [slug]) : null);
+  const mercadoPorSlug = async (slug) => (/^[a-z0-9-]{3,50}$/.test(slug) ? db.get('SELECT id,nome,slug,whatsapp FROM mercados WHERE slug=? AND ativo=1', [slug]) : null);
   const acharCliente = async (mercadoId, telefone) => {
     const t = normTel(telefone);
     if (t.length < 10) return null;

@@ -1,5 +1,6 @@
 // Conta do mercado: cadastro, login, sessão, troca de senha e equipe (dono + caixas).
 const U = require('../util');
+const { registroAberto } = require('./admin');
 
 const PAPEIS = { dono: 'Dono', caixa: 'Caixa' };
 const emailValido = (e) => /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(e);
@@ -11,7 +12,7 @@ module.exports = function registraConta({ app, api, db, audita }) {
     const { nome, email, senha, pix_chave, whatsapp } = req.body || {};
     const em = String(email || '').trim().toLowerCase();
     if (!U.texto(nome, 80) || !emailValido(em) || String(senha || '').length < 8) return res.status(400).json({ erro: 'Informe nome, email válido e senha (mín. 8 caracteres).' });
-    if (process.env.REGISTRO_ABERTO === 'false') return res.status(403).json({ erro: 'Cadastro de novos mercados está fechado.' });
+    if (!(await registroAberto(db))) return res.status(403).json({ erro: 'Cadastro de novos mercados está fechado.' });
     if (!U.limite('reg:' + req.ip, 10, 60 * 60_000)) return res.status(429).json({ erro: 'Muitos cadastros. Tente mais tarde.' });
     try {
       const u = await db.tx(async (t) => {
@@ -34,9 +35,11 @@ module.exports = function registraConta({ app, api, db, audita }) {
     const em = String(req.body?.email || '').trim().toLowerCase();
     if (!U.limite('login:' + req.ip, 10, 60_000) || !U.limite('login-em:' + em, 20, 15 * 60_000))
       return res.status(429).json({ erro: 'Muitas tentativas. Aguarde um pouco.' });
-    const u = await db.get('SELECT u.*, m.nome AS mercado_nome FROM usuarios u JOIN mercados m ON m.id=u.mercado_id WHERE u.email=?', [em]);
+    const u = await db.get('SELECT u.*, m.nome AS mercado_nome, m.ativo AS mercado_ativo, m.bloqueio_motivo FROM usuarios u JOIN mercados m ON m.id=u.mercado_id WHERE u.email=?', [em]);
     if (!u || !U.confereSenha(String(req.body?.senha || ''), u.senha_hash)) return res.status(401).json({ erro: 'Email ou senha inválidos.' });
     if (!u.ativo) return res.status(403).json({ erro: 'Este acesso foi desativado pelo dono do mercado.' });
+    if (!u.mercado_ativo) return res.status(403).json({ erro: `Acesso suspenso${u.bloqueio_motivo ? ': ' + u.bloqueio_motivo : ''}. Fale com o suporte da Caderneta.` });
+    await db.run('UPDATE usuarios SET ultimo_login=? WHERE id=?', [U.agoraUTC(), u.id]);
     res.json({ token: tokenDe(u), mercado: { id: u.mercado_id, nome: u.mercado_nome }, usuario: { nome: u.nome, papel: u.papel } });
   });
 
@@ -46,7 +49,8 @@ module.exports = function registraConta({ app, api, db, audita }) {
   api.use(async (req, res, next) => {
     try {
       const p = U.verifica((req.get('authorization') || '').replace(/^Bearer /, ''));
-      const u = p && U.intId(p.u) ? await db.get('SELECT id,mercado_id,nome,email,papel,ativo,sessao_versao FROM usuarios WHERE id=?', [p.u]) : null;
+      const u = p && U.intId(p.u) ? await db.get('SELECT u.id,u.mercado_id,u.nome,u.email,u.papel,u.ativo,u.sessao_versao,m.ativo AS mercado_ativo FROM usuarios u JOIN mercados m ON m.id=u.mercado_id WHERE u.id=?', [p.u]) : null;
+      if (u && !u.mercado_ativo) return res.status(401).json({ erro: 'Acesso suspenso. Fale com o suporte da Caderneta.' });
       if (!u || !u.ativo || u.sessao_versao !== p.v) return res.status(401).json({ erro: 'Sessão encerrada. Entre novamente.' });
       req.mid = u.mercado_id; req.uid = u.id; req.papel = u.papel; req.usuario = u;
       next();

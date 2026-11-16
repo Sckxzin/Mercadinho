@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#070d1a">
+<meta name="robots" content="noindex,nofollow">
+<title>Caderneta — Admin</title>
+<link rel="icon" href="/assets/icon-192.png">
+<link rel="stylesheet" href="/assets/ui.css?v=6">
+<style>
+  .logo.adm{background:linear-gradient(135deg,#fbbf24,#ff6b7a)}
+  .papel.adm{background:rgba(251,191,36,.18);color:var(--amb)}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
+  .kpis .card{padding:14px;margin:0!important}.kpis .lbl{font-size:12px;color:var(--mut)}.kpis .val{font-size:24px;font-weight:800;margin-top:2px;font-variant-numeric:tabular-nums}
+  .kpis .sub{font-size:12px;color:var(--dim);margin-top:4px}
+  .alerta{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-radius:14px;border:1px solid rgba(251,191,36,.35);background:rgba(251,191,36,.08);font-size:13.5px;line-height:1.5}
+  .alerta.bad{border-color:rgba(255,107,122,.4);background:rgba(255,107,122,.08)}
+  .alerta+.alerta{margin-top:8px}
+  .tab{width:100%;border-collapse:collapse;font-size:13.5px}
+  .tab th{text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);font-weight:700;padding:8px 10px;border-bottom:1px solid var(--line)}
+  .tab td{padding:11px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+  .tab tr:last-child td{border-bottom:0}
+  .tab tr.click:hover td{background:rgba(255,255,255,.025)}
+  .tab .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  @media(max-width:720px){.tab .opc{display:none}}
+  .toggle{display:flex;justify-content:space-between;align-items:center;gap:12px}
+</style>
+</head>
+<body>
+<div id="offline" role="status">Sem internet.</div>
+<div class="wrap wide" id="root"></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script>
+'use strict';
+const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const brl = c => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ini = n => String(n || '?').trim().split(/\s+/).filter(x => /^\p{L}/u.test(x)).slice(0, 2).map(x => x[0]).join('').toUpperCase() || '?';
+const utc = d => new Date(String(d).replace(' ', 'T') + (String(d).includes('Z') ? '' : 'Z'));
+const dt = d => d ? utc(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+const dias = d => d ? Math.floor((Date.now() - utc(d)) / 864e5) : null;
+const quando = d => { const n = dias(d); return n === null ? 'nunca' : n === 0 ? 'hoje' : n === 1 ? 'ontem' : `há ${n} dias` };
+const num = n => Number(n || 0).toLocaleString('pt-BR');
+const loc = { get: k => { try { return sessionStorage.getItem(k) } catch { return null } }, set: (k, v) => { try { v == null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v) } catch {} } };
+const S = { tk: loc.get('adm'), eu: null };
+function toast(m, tipo = '') { const t = $('#toast'); t.textContent = m; t.className = 'on ' + tipo; clearTimeout(toast.t); toast.t = setTimeout(() => t.className = '', tipo === 'erro' ? 4200 : 2600) }
+const run = async fn => { try { return await fn() } catch (e) { if (e.message !== 'auth') toast(e.message || 'Erro', 'erro') } };
+
+async function api(path, { method = 'GET', body } = {}) {
+  let r;
+  try { r = await fetch('/api/admin' + path, { method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), authorization: 'Bearer ' + S.tk }, body: body ? JSON.stringify(body) : undefined }) }
+  catch { throw new Error('Sem conexão com o servidor.') }
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401) { sair(j.erro); throw new Error('auth') }
+  if (!r.ok) throw Object.assign(new Error(j.erro || 'Erro'), { status: r.status });
+  return j;
+}
+
+/* ---------- janelas ---------- */
+function modal(html, aoAbrir) {
+  return new Promise(res => {
+    const o = document.createElement('div'); o.className = 'ov'; o.innerHTML = `<div class="md" role="dialog" aria-modal="true">${html}</div>`;
+    document.body.appendChild(o); document.body.classList.add('travado');
+    const fecha = v => { if (o._f) return; o._f = 1; o.classList.add('saindo'); setTimeout(() => { o.remove(); if (!$('.ov')) document.body.classList.remove('travado') }, 150); res(v) };
+    o._fecha = fecha; o.addEventListener('mousedown', e => { if (e.target === o) fecha(null) });
+    $$('[data-x]', o).forEach(b => b.onclick = () => fecha(null)); aoAbrir && aoAbrir(o, fecha);
+  });
+}
+addEventListener('keydown', e => { if (e.key === 'Escape') $$('.ov:not(.saindo)').pop()?._fecha(null) });
+function form(titulo, campos, { ok = 'Salvar', sub = '', enviar, perigo } = {}) {
+  const html = `<h3>${esc(titulo)}</h3>${sub ? `<div class="muted small" style="line-height:1.5">${sub}</div>` : ''}<form novalidate>${campos.map(c =>
+    `<label class="f" for="f_${c.id}">${esc(c.label)}</label>` + (c.type === 'textarea' ? `<textarea id="f_${c.id}" rows="3" maxlength="200">${esc(c.value || '')}</textarea>`
+      : `<input id="f_${c.id}" type="${c.type || 'text'}" value="${esc(c.value || '')}" placeholder="${esc(c.ph || '')}" autocomplete="${c.auto || 'off'}">`) + (c.hint ? `<div class="hint">${esc(c.hint)}</div>` : '')).join('')}
+    <div class="err small bad" role="alert"></div><div class="acts"><button type="button" class="btn sec" data-x>Cancelar</button><button class="btn ${perigo ? 'danger' : ''}">${esc(ok)}</button></div></form>`;
+  return modal(html, (o, fecha) => {
+    setTimeout(() => $('input,textarea', o)?.focus(), 60);
+    $('form', o).onsubmit = async e => {
+      e.preventDefault(); const v = {}; for (const c of campos) v[c.id] = $('#f_' + c.id, o).value.trim();
+      const falta = campos.find(c => c.req && !v[c.id]); if (falta) return $('.err', o).textContent = 'Preencha: ' + falta.label;
+      const b = $('form .btn:not(.sec)', o); b.disabled = true; b.classList.add('carregando');
+      try { const r = await enviar(v); fecha(r ?? v) } catch (x) { if (x.message !== 'auth') $('.err', o).textContent = x.message; b.disabled = false; b.classList.remove('carregando') }
+    };
+  });
+}
+const confirma = (t, txt, { ok = 'Confirmar', perigo } = {}) => modal(`<h3>${esc(t)}</h3><p class="muted" style="line-height:1.5">${txt}</p><div class="acts"><button class="btn sec" data-x>Cancelar</button><button class="btn ${perigo ? 'danger' : ''}" data-s>${esc(ok)}</button></div>`,
+  (o, f) => { $('[data-s]', o).onclick = () => f(true) }).then(Boolean);
+
+/* ---------- login ---------- */
+function login(msg) {
+  $('#root').innerHTML = `<div class="entra" style="max-width:400px;margin:10vh auto 0"><div class="brand" style="margin-bottom:18px"><div class="logo adm">A</div><div><h2>Caderneta · Admin</h2><div class="muted small">Administração do sistema</div></div></div>
+    <form class="card" id="fl" novalidate><label class="f" for="em">Email</label><input id="em" type="email" autocomplete="username">
+    <label class="f" for="se">Senha</label><input id="se" type="password" autocomplete="current-password">
+    <button class="btn block" id="go" style="margin-top:16px">Entrar</button><div id="lerr" class="small bad" role="alert" style="min-height:18px;margin-top:10px">${esc(msg || '')}</div>
+    <div class="hint">Primeiro acesso? Crie seu admin com <code>npm run criar-admin</code> ou as variáveis ADMIN_EMAIL e ADMIN_SENHA.</div></form></div>`;
+  $('#fl').onsubmit = async e => {
+    e.preventDefault(); const b = $('#go'); b.classList.add('carregando'); b.disabled = true;
+    try { const r = await fetch('/api/admin/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: $('#em').value, senha: $('#se').value }) });
+      const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.erro || 'Erro'); S.tk = j.token; loc.set('adm', S.tk); inicia() }
+    catch (x) { $('#lerr').textContent = x.message; b.classList.remove('carregando'); b.disabled = false }
+  };
+  setTimeout(() => $('#em').focus(), 50);
+}
+function sair(msg) { S.tk = null; loc.set('adm', null); $$('.ov').forEach(o => o.remove()); document.body.classList.remove('travado'); history.replaceState(null, '', '/admin'); login(msg) }
+
+/* ---------- casca e rotas ---------- */
+const ABAS = [['visao', 'Visão geral'], ['mercados', 'Mercados'], ['acoes', 'Registro de ações'], ['sistema', 'Sistema']];
+async function inicia() {
+  try { S.eu = await api('/eu') } catch (e) { if (e.message !== 'auth') login(e.message); return }
+  $('#root').innerHTML = `<header class="topo"><div class="brand"><div class="logo adm">A</div><div><b>Caderneta · Admin</b><div class="who muted tiny">${esc(S.eu.nome)} <span class="papel adm">admin</span></div></div></div>
+    <button class="btn sec sm" data-a="sair">Sair</button></header><nav class="nav" id="nav"></nav><main id="v"></main>`;
+  $('#nav').innerHTML = ABAS.map(([k, n]) => `<a href="#/${k}" data-aba="${k}">${n}</a>`).join('');
+  rota();
+}
+let seq = 0;
+async function rota({ suave } = {}) {
+  if (!S.eu) return;
+  let [aba, arg] = location.hash.replace(/^#\/?/, '').split('/'); if (!V[aba]) aba = 'visao';
+  $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.aba === aba));
+  const meu = ++seq, v = $('#v'), y = scrollY;
+  const t = suave ? null : setTimeout(() => { if (meu === seq) v.innerHTML = '<div class="card"><div class="sk" style="width:40%"></div><div class="sk" style="width:70%;margin-top:14px"></div></div>' }, 160);
+  try {
+    const d = await V[aba].carrega(arg); if (meu !== seq) return; clearTimeout(t);
+    v.innerHTML = V[aba].html(d, arg); V[aba].liga?.(d, arg);
+    if (suave) scrollTo({ top: y, behavior: 'instant' }); else { v.classList.remove('entra'); void v.offsetWidth; v.classList.add('entra'); scrollTo({ top: 0, behavior: 'instant' }) }
+  } catch (e) { clearTimeout(t); if (e.message !== 'auth' && meu === seq) v.innerHTML = `<div class="card empty"><b>⚠️</b>${esc(e.message)}</div>` }
+}
+const atualiza = () => rota({ suave: true });
+addEventListener('hashchange', () => rota());
+addEventListener('online', () => $('#offline').classList.remove('on')); addEventListener('offline', () => $('#offline').classList.add('on'));
+document.addEventListener('click', e => {
+  const a = e.target.closest('[data-a]'); if (a) { e.preventDefault(); e.stopPropagation(); const f = A[a.dataset.a]; f && run(() => f(a.dataset, a)); return }
+  const h = e.target.closest('[data-href]'); if (h) location.hash = h.dataset.href;
+});
+
+/* ---------- telas ---------- */
+const vazio = t => `<div class="empty">${t}</div>`;
+const cap = (t, extra = '') => `<div class="sec-h"><div class="cap">${t}</div>${extra}</div>`;
+const status = m => m.ativo ? '<span class="chip ok">ativo</span>' : '<span class="chip bad">suspenso</span>';
+const ACAO = {
+  'admin.login': 'Entrou no admin', 'mercado.criado': 'Criou mercado', 'mercado.suspenso': 'Suspendeu mercado', 'mercado.reativado': 'Reativou mercado', 'mercado.renomeado': 'Renomeou mercado',
+  'usuario.senha_redefinida': 'Redefiniu senha de', 'usuario.desativado': 'Desativou acesso de', 'usuario.reativado': 'Reativou acesso de', 'usuario.sessoes_encerradas': 'Derrubou as sessões de',
+  'config.registro_aberto': 'Abriu o cadastro público', 'config.registro_fechado': 'Fechou o cadastro público', 'admin.adicionado': 'Adicionou admin', 'admin.desativado': 'Desativou admin', 'admin.reativado': 'Reativou admin',
+  'admin.senha_trocada': 'Trocou a própria senha', 'admin.criado_terminal': 'Admin criado pelo terminal', 'admin.senha_redefinida_terminal': 'Senha de admin redefinida pelo terminal',
+  // ações dentro dos mercados (auditoria do mercado)
+  'cliente.criado': 'Cadastrou cliente', 'cliente.editado': 'Editou cliente', 'cliente.novo_link': 'Gerou novo link', 'cliente.convite_app': 'Convidou cliente para o app', 'compra.acima_limite': 'Compra acima do limite',
+  'lancamento.estornado': 'Estornou lançamento', 'aviso.resolvido': 'Resolveu aviso', 'comprovante.confirmado': 'Confirmou comprovante', 'comprovante.recusado': 'Recusou comprovante', 'produto.excluido': 'Excluiu produto',
+  'senha.trocada': 'Trocou a senha', 'senha.redefinida_suporte': 'Senha redefinida (suporte)', 'sessoes.encerradas': 'Saiu de todos os aparelhos', 'equipe.adicionado': 'Adicionou caixa', 'equipe.desativado': 'Desativou caixa',
+  'equipe.reativado': 'Reativou caixa', 'equipe.senha_redefinida': 'Redefiniu senha de caixa', 'export.clientes': 'Exportou clientes', 'export.lancamentos': 'Exportou lançamentos', 'export.backup': 'Baixou backup', 'mercado.pix_alterado': 'Alterou a chave Pix',
+};
+const linhaAcao = (x, comMercado) => `<div class="it ${comMercado && x.mercado_id ? 'click' : ''}" ${comMercado && x.mercado_id ? `data-href="/mercado/${x.mercado_id}"` : ''}><div class="main"><div class="t" style="white-space:normal">${esc(ACAO[x.acao] || x.acao)}${comMercado && x.mercado ? ` · <span class="muted">${esc(x.mercado)}</span>` : ''}</div>
+  <div class="s">${dt(x.criado_em)}${x.admin ? ' · ' + esc(x.admin) : ''}${x.usuario ? ' · ' + esc(x.usuario) : ''}${x.detalhe ? ' · ' + esc(x.detalhe) : ''}</div></div></div>`;
+const V = {};
+
+V.visao = {
+  carrega: () => Promise.all([api('/visao'), api('/mercados')]),
+  html: ([v, ms]) => {
+    const ativos = ms.filter(m => m.ativo);
+    const parados = ativos.filter(m => (dias(m.ultimo_lancamento) ?? dias(m.criado_em)) >= 14);
+    const semLogin = ativos.filter(m => m.ultimo_login && dias(m.ultimo_login) >= 14);
+    const alertas = [
+      v.sistema.app_secret_padrao && v.sistema.banco === 'PostgreSQL' ? ['bad', '🔐', 'O sistema está sem <b>APP_SECRET</b>. Defina essa variável no Railway.'] : null,
+      v.mercados.suspensos ? ['', '⏸️', `${v.mercados.suspensos} mercado(s) suspenso(s).`] : null,
+      parados.length ? ['', '😴', `${parados.length} mercado(s) sem lançamentos há 14 dias ou mais: ${parados.slice(0, 5).map(m => `<a href="#/mercado/${m.id}">${esc(m.nome)}</a>`).join(', ')}${parados.length > 5 ? '…' : ''}`] : null,
+      semLogin.length ? ['', '👤', `${semLogin.length} mercado(s) onde ninguém entra há 14 dias ou mais.`] : null,
+      v.sistema.registro_aberto ? ['', '🚪', 'O cadastro público está <b>aberto</b>: qualquer pessoa pode criar um mercado. Feche em <a href="#/sistema">Sistema</a> se não quiser.'] : null,
+    ].filter(Boolean);
+    return `${alertas.length ? `<div style="margin-bottom:14px">${alertas.map(([c, i, t]) => `<div class="alerta ${c}"><span>${i}</span><div>${t}</div></div>`).join('')}</div>` : ''}
+    <div class="hero"><div class="lbl">Total a receber em todos os mercados</div><div class="val">${brl(v.financeiro.a_receber)}</div>
+      <div class="linha"><span>fiado no mês <b>${brl(v.financeiro.fiado_mes)}</b></span><span>recebido no mês <b class="ok">${brl(v.financeiro.recebido_mes)}</b></span><span><b>${num(v.financeiro.lanc_30d)}</b> lançamentos em 30 dias</span></div></div>
+    ${cap('Números')}<div class="kpis">
+      <div class="card"><div class="lbl">Mercados ativos</div><div class="val">${num(v.mercados.ativos)}</div><div class="sub">${num(v.mercados.total)} no total · ${num(v.mercados.novos_mes)} novo(s) no mês</div></div>
+      <div class="card"><div class="lbl">Usando de verdade (7 dias)</div><div class="val">${num(v.mercados.ativos_7d)}</div><div class="sub">mercados com lançamento na semana</div></div>
+      <div class="card"><div class="lbl">Pessoas com acesso</div><div class="val">${num(v.usuarios.total)}</div><div class="sub">${num(v.usuarios.caixas)} caixa(s)</div></div>
+      <div class="card"><div class="lbl">Clientes cadastrados</div><div class="val">${num(v.clientes.total)}</div><div class="sub">${num(v.clientes.com_app)} usam o app</div></div>
+      <div class="card"><div class="lbl">Comprovantes aguardando</div><div class="val ${v.comprovantes_pendentes ? 'amb' : ''}">${num(v.comprovantes_pendentes)}</div><div class="sub">em todos os mercados</div></div>
+    </div>
+    ${cap('Mercados mais recentes', '<a class="btn link" href="#/mercados">ver todos →</a>')}${tabelaMercados(ms.slice(0, 8))}`;
+  },
+};
+
+const tabelaMercados = ms => ms.length ? `<div class="card" style="padding:6px 8px;overflow-x:auto"><table class="tab"><thead><tr><th>Mercado</th><th class="opc">Dono</th><th class="num">Clientes</th><th class="num">A receber</th><th class="opc">Última atividade</th><th></th></tr></thead><tbody>
+  ${ms.map(m => `<tr class="click" data-href="/mercado/${m.id}"><td><b>${esc(m.nome)}</b><div class="tiny dim">${esc(m.cidade || '')}${m.cidade ? ' · ' : ''}desde ${dt(m.criado_em).slice(0, 8)}</div></td>
+    <td class="opc small">${esc(m.email_dono || '—')}</td><td class="num">${num(m.clientes)}</td><td class="num">${brl(m.a_receber)}</td>
+    <td class="opc small">${quando(m.ultimo_lancamento)}</td><td>${status(m)}</td></tr>`).join('')}</tbody></table></div>` : `<div class="card">${vazio('Nenhum mercado.')}</div>`;
+
+V.mercados = {
+  carrega: () => api('/mercados?q=' + encodeURIComponent(S.q || '')),
+  html: ms => `${cap('Mercados', '<button class="btn" data-a="novoMercado">+ Novo mercado</button>')}
+    <div class="barra"><div class="busca"><input id="bq" type="search" placeholder="Buscar por nome, email ou cidade…" value="${esc(S.q || '')}" autocomplete="off"></div></div>
+    <div id="tm" style="margin-top:12px">${tabelaMercados(ms)}</div><div class="contagem">${ms.length} mercado(s)</div>`,
+  liga: () => { let t; $('#bq').addEventListener('input', e => { S.q = e.target.value; clearTimeout(t); t = setTimeout(() => run(async () => { $('#tm').innerHTML = tabelaMercados(await api('/mercados?q=' + encodeURIComponent(S.q))) }), 220) }) },
+};
+
+V.mercado = {
+  carrega: id => api('/mercados/' + encodeURIComponent(id)),
+  html: ({ mercado: m, equipe, numeros: n, auditoria, acoes_admin }) => { const url = location.origin + '/m/' + m.slug; return `
+    <a class="btn link" href="#/mercados">← Mercados</a>
+    <div class="hero" style="margin-top:6px"><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><div class="av" style="width:46px;height:46px">${esc(ini(m.nome))}</div>
+      <div style="flex:1;min-width:180px"><b style="font-size:20px">${esc(m.nome)}</b> ${status(m)}<div class="muted small">${esc(m.cidade || 'cidade não informada')} · desde ${dt(m.criado_em)} · #${m.id}</div></div></div>
+      ${!m.ativo && m.bloqueio_motivo ? `<div class="alerta bad" style="margin-top:12px"><span>⏸️</span><div>Motivo da suspensão: ${esc(m.bloqueio_motivo)}</div></div>` : ''}
+      <div class="row-btns" style="margin-top:14px">${m.ativo ? `<button class="btn danger sm" data-a="suspender" data-id="${m.id}" data-nome="${esc(m.nome)}">Suspender mercado</button>` : `<button class="btn good sm" data-a="reativar" data-id="${m.id}">Reativar mercado</button>`}
+        <button class="btn sec sm" data-a="renomear" data-id="${m.id}" data-nome="${esc(m.nome)}">Renomear</button><a class="btn sec sm" href="${esc(url)}" target="_blank" rel="noopener">Abrir app do cliente</a></div></div>
+    <div class="kpis" style="margin-top:12px">
+      <div class="card"><div class="lbl">A receber</div><div class="val">${brl(m.a_receber)}</div><div class="sub">${num(n.devendo)} cliente(s) devendo</div></div>
+      <div class="card"><div class="lbl">Clientes</div><div class="val">${num(m.clientes)}</div><div class="sub">${num(n.clientes_app)} usam o app</div></div>
+      <div class="card"><div class="lbl">Fiado no mês</div><div class="val">${brl(n.fiado_mes)}</div><div class="sub">recebido ${brl(n.recebido_mes)}</div></div>
+      <div class="card"><div class="lbl">Atividade</div><div class="val">${quando(m.ultimo_lancamento)}</div><div class="sub">${num(n.lancamentos)} lançamentos no total</div></div>
+      <div class="card"><div class="lbl">Outros</div><div class="val" style="font-size:16px;line-height:1.6">${num(n.produtos)} produtos<br>${num(n.promocoes)} promoções</div><div class="sub">${num(n.comprovantes_pendentes)} comprovante(s) pendente(s)</div></div>
+    </div>
+    ${cap('Equipe')}<div class="card list">${equipe.map(u => `<div class="it"><div class="av">${esc(ini(u.nome))}</div><div class="main"><div class="t">${esc(u.nome)} <span class="papel">${u.papel}</span> ${u.ativo ? '' : '<span class="chip bad">desativado</span>'}</div>
+      <div class="s">${esc(u.email)} · último acesso ${quando(u.ultimo_login)}</div></div><div class="acoes"><button class="btn sec sm" data-a="senhaUsuario" data-id="${u.id}" data-nome="${esc(u.nome)}">Nova senha</button>
+      <button class="btn sec sm" data-a="derrubar" data-id="${u.id}" data-nome="${esc(u.nome)}" title="Encerra as sessões abertas">Desconectar</button>
+      <button class="btn ${u.ativo ? 'danger' : 'good'} sm" data-a="ativaUsuario" data-id="${u.id}" data-v="${u.ativo ? 0 : 1}" data-nome="${esc(u.nome)}">${u.ativo ? 'Desativar' : 'Reativar'}</button></div></div>`).join('')}</div>
+    <div class="grade g2" style="margin-top:12px"><div><div class="cap" style="margin:14px 2px 10px">O que aconteceu neste mercado</div><div class="card list">${auditoria.map(x => linhaAcao(x)).join('') || vazio('Nada ainda.')}</div></div>
+      <div><div class="cap" style="margin:14px 2px 10px">Ações do admin neste mercado</div><div class="card list">${acoes_admin.map(x => linhaAcao(x)).join('') || vazio('Nenhuma.')}</div></div></div>
+    <div class="hint" style="margin:10px 2px">Por privacidade (LGPD), o admin vê números e equipe, não a lista de clientes nem as compras.</div>` },
+};
+
+V.acoes = {
+  carrega: () => api('/log'),
+  html: r => `${cap('Registro de ações dos administradores')}<div class="card list" id="lg">${r.itens.map(x => linhaAcao(x, true)).join('') || vazio('Nada ainda.')}</div>
+    <button class="btn sec sm mais" id="maisLog" data-a="maisLog" style="${r.tem_mais ? '' : 'display:none'}">Carregar mais</button>`,
+  liga: r => { S.logUlt = r.itens.at(-1)?.id },
+};
+
+V.sistema = {
+  carrega: () => Promise.all([api('/visao'), api('/admins')]),
+  html: ([v, admins]) => { const s = v.sistema; const kv = (k, val) => `<div class="kv"><span class="muted">${k}</span><b>${val}</b></div>`; return `<div class="grade g2">
+    <div class="card"><h3>Saúde do sistema</h3><div style="margin-top:8px">
+      ${kv('Situação', '<span class="ok">● no ar</span>')}${kv('Versão', esc(s.versao))}${kv('Banco de dados', `${esc(s.banco)} · ${s.banco_ms} ms`)}${kv('Migrações', esc(s.migracao))}
+      ${kv('No ar desde', dt(s.no_ar_desde))}${kv('Memória', s.memoria_mb + ' MB')}${kv('Node', esc(s.node))}${kv('Fuso', esc(s.fuso))}${kv('WhatsApp automático', s.whatsapp_automatico ? '<span class="ok">ligado</span>' : 'manual')}</div></div>
+    <div class="card"><h3>Cadastro público</h3><div class="toggle" style="margin-top:10px"><div class="muted small" style="line-height:1.5">Quando aberto, qualquer pessoa cria um mercado pela tela de login. Fechado, só você cria (em Mercados → Novo mercado).</div>
+      <button class="btn ${s.registro_aberto ? 'danger' : 'good'} sm" data-a="registro" data-v="${s.registro_aberto ? 0 : 1}">${s.registro_aberto ? 'Fechar' : 'Abrir'}</button></div>
+      <div style="margin-top:10px">Agora: ${s.registro_aberto ? '<b class="amb">aberto</b>' : '<b class="ok">fechado</b>'}</div></div>
+    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3>Administradores</h3><button class="btn sm" data-a="novoAdmin">+ Admin</button></div>
+      <div class="list" style="margin-top:6px">${admins.map(a => `<div class="it"><div class="av" style="background:linear-gradient(135deg,#fbbf24,#ff6b7a)">${esc(ini(a.nome))}</div><div class="main"><div class="t">${esc(a.nome)} ${a.ativo ? '' : '<span class="chip bad">desativado</span>'}</div><div class="s">${esc(a.email)} · último acesso ${quando(a.ultimo_login)}</div></div>
+        ${a.id === S.eu.id ? '<span class="tiny dim">você</span>' : `<button class="btn ${a.ativo ? 'danger' : 'good'} sm" data-a="ativaAdmin" data-id="${a.id}" data-v="${a.ativo ? 0 : 1}">${a.ativo ? 'Desativar' : 'Reativar'}</button>`}</div>`).join('')}</div></div>
+    <div class="card"><h3>Minha conta</h3>${kv('Nome', esc(S.eu.nome))}${kv('Email', esc(S.eu.email))}<div class="row-btns" style="margin-top:12px"><button class="btn sec sm" data-a="minhaSenha">Trocar senha</button><button class="btn sec sm" data-a="sair">Sair</button></div>
+      <div class="hint">Por segurança, a sessão do admin dura 12 horas e fecha ao fechar o navegador.</div></div></div>` },
+};
+
+/* ---------- ações ---------- */
+const A = {
+  sair: () => sair(),
+  novoMercado: async () => {
+    const r = await form('Novo mercado', [{ id: 'nome', label: 'Nome do mercado', req: true }, { id: 'cidade', label: 'Cidade' }, { id: 'whatsapp', label: 'WhatsApp do mercado' },
+      { id: 'email', label: 'Email do dono', type: 'email', req: true }, { id: 'senha', label: 'Senha inicial do dono (mín. 8)', type: 'text', req: true, hint: 'Passe para o dono; ele pode trocar em Config → Minha conta.' }],
+      { ok: 'Criar mercado', enviar: v => api('/mercados', { method: 'POST', body: v }) });
+    if (r) { toast('Mercado criado ✓', 'ok'); location.hash = '#/mercado/' + r.id }
+  },
+  suspender: async d => {
+    const r = await form(`Suspender ${d.nome}`, [{ id: 'motivo', label: 'Motivo (o dono vê ao tentar entrar)', type: 'textarea', value: 'Mensalidade em aberto' }],
+      { ok: 'Suspender', perigo: true, sub: 'Ninguém da equipe consegue entrar e o app dos clientes fica indisponível. Nenhum dado é apagado; reative quando quiser.', enviar: v => api('/mercados/' + d.id, { method: 'PATCH', body: { ativo: false, motivo: v.motivo } }) });
+    if (r) { toast('Mercado suspenso'); atualiza() }
+  },
+  reativar: async d => { await api('/mercados/' + d.id, { method: 'PATCH', body: { ativo: true } }); toast('Mercado reativado ✓', 'ok'); atualiza() },
+  renomear: async d => { const r = await form('Renomear mercado', [{ id: 'nome', label: 'Nome', value: d.nome, req: true }], { enviar: v => api('/mercados/' + d.id, { method: 'PATCH', body: v }) }); if (r) { toast('Salvo ✓', 'ok'); atualiza() } },
+  senhaUsuario: async d => {
+    const r = await form(`Nova senha para ${d.nome}`, [{ id: 'senha', label: 'Nova senha (mín. 8)', req: true }], { sub: 'A pessoa é desconectada e entra com a nova senha.', enviar: v => api(`/usuarios/${d.id}/senha`, { method: 'POST', body: v }) });
+    if (r) toast('Senha redefinida ✓', 'ok');
+  },
+  derrubar: async d => { if (!await confirma('Desconectar', `Encerrar as sessões abertas de ${esc(d.nome)}? Ela precisará entrar de novo.`, { ok: 'Desconectar' })) return; await api(`/usuarios/${d.id}/sair`, { method: 'POST' }); toast('Sessões encerradas ✓', 'ok') },
+  ativaUsuario: async d => {
+    const ativo = d.v === '1';
+    if (!ativo && !await confirma('Desativar acesso', `${esc(d.nome)} perde o acesso na hora.`, { ok: 'Desativar', perigo: true })) return;
+    await api(`/usuarios/${d.id}`, { method: 'PATCH', body: { ativo } }); toast(ativo ? 'Acesso reativado' : 'Acesso desativado', 'ok'); atualiza();
+  },
+  maisLog: async (d, b) => { b.classList.add('carregando'); try { const r = await api('/log?antes=' + S.logUlt); $('#lg').insertAdjacentHTML('beforeend', r.itens.map(x => linhaAcao(x, true)).join('')); S.logUlt = r.itens.at(-1)?.id; b.style.display = r.tem_mais ? '' : 'none' } finally { b.classList.remove('carregando') } },
+  registro: async d => { const r = await api('/config', { method: 'PATCH', body: { registro_aberto: d.v === '1' } }); toast(r.registro_aberto ? 'Cadastro aberto' : 'Cadastro fechado ✓', 'ok'); atualiza() },
+  novoAdmin: async () => {
+    const r = await form('Novo administrador', [{ id: 'nome', label: 'Nome', req: true }, { id: 'email', label: 'Email', type: 'email', req: true }, { id: 'senha', label: 'Senha (mín. 10)', type: 'password', auto: 'new-password', req: true }],
+      { ok: 'Adicionar', sub: 'Administradores veem e controlam todos os mercados.', enviar: v => api('/admins', { method: 'POST', body: v }) });
+    if (r) { toast('Admin adicionado ✓', 'ok'); atualiza() }
+  },
+  ativaAdmin: async d => { await api('/admins/' + d.id, { method: 'PATCH', body: { ativo: d.v === '1' } }); atualiza() },
+  minhaSenha: async () => {
+    const r = await form('Trocar senha', [{ id: 'atual', label: 'Senha atual', type: 'password', auto: 'current-password', req: true }, { id: 'nova', label: 'Nova senha (mín. 10)', type: 'password', auto: 'new-password', req: true }],
+      { enviar: v => api('/eu/senha', { method: 'POST', body: v }) });
+    if (r) { S.tk = r.token; loc.set('adm', S.tk); toast('Senha trocada ✓', 'ok') }
+  },
+};
+
+if (!navigator.onLine) $('#offline').classList.add('on');
+S.tk ? inicia() : login();
+</script>
+</body>
+</html>

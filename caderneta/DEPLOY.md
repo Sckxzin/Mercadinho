@@ -48,8 +48,15 @@ Para a rotina enviar sozinha, cadastre no serviço da rotina: `WA_TOKEN` (token 
 ## Atualizando de uma versão anterior (v0.4 → v0.5)
 Basta publicar: o banco é atualizado sozinho na primeira subida (migrações). O dono continua entrando com o mesmo email e senha. Todos precisarão **entrar de novo uma vez** (o formato da sessão mudou). Recomendado: baixar um backup no Supabase antes.
 
+## Seu painel de administrador (/admin)
+Escolha um jeito para criar o seu acesso:
+- **Pelo Railway (sem terminal):** em **Variables**, adicione `ADMIN_EMAIL` (seu email) e `ADMIN_SENHA` (mín. 10 caracteres). Na próxima subida o admin é criado. Depois de entrar, **apague a variável `ADMIN_SENHA`** e troque a senha em *Sistema → Minha conta*.
+- **Pelo terminal:** com a `DATABASE_URL` do Supabase definida, `npm run criar-admin -- seu@email.com SenhaForte123 "Seu Nome"`. O mesmo comando redefine a senha se você esquecer.
+
+Acesse `https://SEU-APP.up.railway.app/admin`. Com o admin, você não precisa mais da variável `REGISTRO_ABERTO`: abra/feche o cadastro em *Sistema*.
+
 ## Esqueceu a senha?
-Caixa: o dono redefine em **Config → Equipe**. Dono: rode na sua máquina, com a `DATABASE_URL` do Supabase definida, `npm run redefinir-senha -- email@do.dono NovaSenha123`.
+Caixa: o dono redefine em **Config → Equipe**. Dono: você redefine pelo painel **/admin** (Mercados → mercado → Nova senha), ou rode na sua máquina, com a `DATABASE_URL` do Supabase definida, `npm run redefinir-senha -- email@do.dono NovaSenha123`.
 
 ## Cuidados
 - **Segurança do banco:** as tabelas ficam com RLS ligado e sem políticas, então a API pública do Supabase não enxerga nada. Só o servidor acessa. Não use a chave `anon` nem exponha a `DATABASE_URL`.
