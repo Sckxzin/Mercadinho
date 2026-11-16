@@ -15,7 +15,7 @@ Na pasta do projeto (onde está o `package.json`):
 ```powershell
 git init
 git add .
-git commit -m "Caderneta v0.4"
+git commit -m "Caderneta v0.5"
 git branch -M main
 git remote add origin https://github.com/SEU_USUARIO/caderneta.git
 git push -u origin main
@@ -40,11 +40,21 @@ Se o app não subir, veja a aba **Deployments → Logs**. Os erros mais comuns:
 - `password authentication failed` / `ENOTFOUND` → `DATABASE_URL` com senha errada ou conexão direta em vez do Session pooler.
 
 ## 4. Rotina diária (opcional): validade e cobranças
-No Railway crie um segundo serviço a partir do mesmo repositório, com as mesmas variáveis, comando `npm run alertas` e um **Cron Schedule** (por exemplo `0 11 * * *`, todo dia às 8h de Brasília). Ele lista produtos vencendo e coloca cobranças na fila. O envio continua manual pelo botão do WhatsApp no painel.
+No Railway crie um segundo serviço a partir do mesmo repositório, com as mesmas variáveis, comando `npm run alertas` e um **Cron Schedule** (por exemplo `0 11 * * *`, todo dia às 8h de Brasília). Ele lista produtos vencendo, cria lembretes de vencimento e coloca as cobranças na fila da aba **Avisos** do painel, onde o dono envia cada uma com 1 toque.
+
+### WhatsApp automático (opcional, API oficial da Meta)
+Para a rotina enviar sozinha, cadastre no serviço da rotina: `WA_TOKEN` (token permanente), `WA_PHONE_ID` (Phone number ID) e `WA_TEMPLATE` (nome de um template **aprovado** em pt_BR com 4 variáveis: nome, mercado, saldo, link). Cada conversa iniciada pela empresa tem custo cobrado pela Meta. Se o envio falhar, a mensagem fica na fila com o erro, para envio manual.
+
+## Atualizando de uma versão anterior (v0.4 → v0.5)
+Basta publicar: o banco é atualizado sozinho na primeira subida (migrações). O dono continua entrando com o mesmo email e senha. Todos precisarão **entrar de novo uma vez** (o formato da sessão mudou). Recomendado: baixar um backup no Supabase antes.
+
+## Esqueceu a senha?
+Caixa: o dono redefine em **Config → Equipe**. Dono: rode na sua máquina, com a `DATABASE_URL` do Supabase definida, `npm run redefinir-senha -- email@do.dono NovaSenha123`.
 
 ## Cuidados
 - **Segurança do banco:** as tabelas ficam com RLS ligado e sem políticas, então a API pública do Supabase não enxerga nada. Só o servidor acessa. Não use a chave `anon` nem exponha a `DATABASE_URL`.
-- **Backup:** confira o que o seu plano do Supabase oferece. Os comprovantes (imagens) ficam dentro do banco.
+- **Backup:** confira o que o seu plano do Supabase oferece. Os comprovantes (imagens) ficam dentro do banco. Além disso, o dono pode baixar um backup completo em **Relatórios → Exportar**.
+- **Fuso horário:** padrão Brasília (`America/Sao_Paulo`). Para outro fuso, defina `APP_TZ`.
 - **Uma instância só:** o limite de tentativas (anti força bruta) fica na memória do app. Mantenha **1 réplica** no Railway.
 - **LGPD:** o app guarda nome, telefone e movimentações dos clientes do mercado. Deixe o aviso/consentimento do cadastro ligado.
 - **Custos e limites:** os planos do Railway e do Supabase mudam. Confira nos sites antes de levar clientes de verdade (no plano grátis o Supabase pode pausar projetos inativos).

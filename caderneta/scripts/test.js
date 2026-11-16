@@ -1,17 +1,28 @@
 // Teste de ponta a ponta (sem frameworks): npm test
+// Por padrão usa o Postgres embutido em memória. Para rodar contra um Postgres de verdade:
+//   TEST_DATABASE_URL=postgres://usuario:senha@localhost:5432/banco_de_teste npm test
+// (o banco de teste é APAGADO no início)
 const assert = require('node:assert/strict');
 const { open } = require('../src/db');
 const { createApp, addDias, hojeISO } = require('../src/server');
+const extras = require('./test-extras');
 
 (async () => {
-  const db = await open({ memory: true });
+  const url = process.env.TEST_DATABASE_URL;
+  if (url) {
+    const { Client } = require('pg');
+    const c = new Client({ connectionString: url }); await c.connect();
+    await c.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;'); await c.end();
+    console.log('Banco: Postgres em', url.replace(/\/\/[^@]*@/, '//***@'));
+  }
+  const db = await open(url ? { url } : { memory: true });
   const server = createApp(db).listen(0);
   const base = `http://127.0.0.1:${server.address().port}`;
   const call = async (method, path, body, token) => {
     const r = await fetch(base + path, { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: 'Bearer ' + token } : {}) }, body: body ? JSON.stringify(body) : undefined });
     return { status: r.status, body: await r.json().catch(() => ({})) };
   };
-  let n = 0; const ok = (m) => console.log(`  ✓ ${m}`, ++n && '');
+  let n = 0; const ok = (m) => { n++; console.log(`  ✓ ${m}`); };
 
   // registro / login
   let r = await call('POST', '/api/registro', { nome: 'Mercado A', email: 'a@a.com', senha: 'senha12345', pix_chave: 'pix-a' });
@@ -115,7 +126,7 @@ const { createApp, addDias, hojeISO } = require('../src/server');
   assert.equal((await call('POST', `/api/app/${slug}/ativar`, { telefone: '81988887777', codigo: '000000', pin: '4321' })).status, 401); ok('código errado é recusado');
   assert.equal((await call('POST', `/api/app/${slug}/ativar`, { telefone: '(81) 98888-7777', codigo: cod, pin: '12' })).status, 400); ok('PIN fraco/curto é recusado');
   r = await call('POST', `/api/app/${slug}/ativar`, { telefone: '(81) 98888-7777', codigo: cod, pin: '4321' });
-  assert.equal(r.status, 200); const sess = r.body.token; ok('primeiro acesso com código cria o PIN (telefone aceita máscara)');
+  assert.equal(r.status, 200); ok('primeiro acesso com código cria o PIN (telefone aceita máscara)');
   assert.equal((await call('POST', `/api/app/${slug}/ativar`, { telefone: '81988887777', codigo: cod, pin: '9999' })).status, 401); ok('código só funciona uma vez');
   assert.equal((await call('POST', `/api/app/${slug}/entrar`, { telefone: '81988887777', pin: '0000' })).status, 401); ok('PIN errado é recusado');
   r = await call('POST', `/api/app/${slug}/entrar`, { telefone: '+55 81 98888-7777', pin: '4321' });
@@ -131,6 +142,8 @@ const { createApp, addDias, hojeISO } = require('../src/server');
 
   r = await call('GET', '/api/resumo', null, A);
   assert.ok(r.body.total_a_receber >= 0 && r.body.clientes_devendo >= 0); ok('resumo do painel');
+
+  await extras({ db, base, call, ok, A, B, slug });
   console.log(`\n${n} verificações passaram.`);
   server.close(); await db.close();
 })().catch((e) => { console.error('FALHOU:', e); process.exit(1); });

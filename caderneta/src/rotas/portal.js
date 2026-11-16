@@ -2,18 +2,21 @@
 // gerado pelo dono, login por telefone + PIN, e app instalável (PWA).
 const path = require('node:path');
 const express = require('express');
-const U = require('./util');
+const U = require('../util');
 
-const PUB = path.join(__dirname, '..', 'public');
-const normTel = (t) => { const d = U.soDigitos(t); return d.startsWith('55') && d.length > 11 ? d.slice(2) : d; };
+const PUB = path.join(__dirname, '..', '..', 'public');
+const { normTel } = U;
 const MSG_FALHA = 'Telefone ou PIN inválido. Se for seu primeiro acesso, peça o código ao mercado.';
 
-module.exports = function registraApp({ app, api, db, baseUrl }) {
+module.exports = function registraApp({ app, api, db, baseUrl, audita }) {
   const mercadoPorSlug = async (slug) => (/^[a-z0-9-]{3,50}$/.test(slug) ? db.get('SELECT id,nome,slug,whatsapp FROM mercados WHERE slug=?', [slug]) : null);
   const acharCliente = async (mercadoId, telefone) => {
     const t = normTel(telefone);
     if (t.length < 10) return null;
-    return (await db.all('SELECT * FROM clientes WHERE mercado_id=? AND ativo=1 AND telefone IS NOT NULL', [mercadoId])).find((c) => normTel(c.telefone) === t) || null;
+    // se (por dados antigos) houver dois clientes ativos com o mesmo telefone, ninguém entra:
+    // é melhor pedir ajuda ao mercado do que abrir a conta da pessoa errada.
+    const cs = await db.all('SELECT * FROM clientes WHERE mercado_id=? AND ativo=1 AND telefone_norm=? LIMIT 2', [mercadoId, t]);
+    return cs.length === 1 ? cs[0] : null;
   };
   // limita tentativas por IP e por telefone (evita adivinhar PIN/código)
   const tentativa = (req, slug, tel) => U.limite('app-ip:' + req.ip, 30, 15 * 60_000) && U.limite(`app:${slug}:${normTel(tel)}`, 8, 15 * 60_000);
@@ -26,10 +29,11 @@ module.exports = function registraApp({ app, api, db, baseUrl }) {
     const codigo = String(require('node:crypto').randomInt(0, 1_000_000)).padStart(6, '0');
     const expira = new Date(Date.now() + 7 * 864e5).toISOString();
     await db.run('UPDATE clientes SET codigo_hash=?, codigo_expira=? WHERE id=?', [U.sha(`${c.id}:${codigo}`), expira, c.id]);
+    await audita(req, 'cliente.convite_app', `#${c.id} ${c.nome}`);
     const m = await db.get('SELECT nome,slug FROM mercados WHERE id=?', [req.mid]);
     const url = `${baseUrl(req)}/m/${m.slug}`;
     const texto = `Olá, ${c.nome.split(' ')[0]}! O ${m.nome} agora tem app: veja sua conta, promoções e pague por Pix. Acesse ${url} e no primeiro acesso use seu telefone e o código ${codigo} (vale 7 dias).`;
-    res.json({ codigo, expira_em: expira, url_app: url, texto, link_wa: `https://wa.me/55${normTel(c.telefone)}?text=${encodeURIComponent(texto)}` });
+    res.json({ codigo, expira_em: expira, url_app: url, texto, link_wa: require('../whatsapp').linkWa(c.telefone, texto) });
   });
 
   api.get('/mercado/qr', async (req, res) => {
@@ -43,7 +47,7 @@ module.exports = function registraApp({ app, api, db, baseUrl }) {
     if (!U.limite('app-info:' + req.ip, 120, 60_000)) return res.status(429).json({ erro: 'Muitas requisições.' });
     const m = await mercadoPorSlug(req.params.slug);
     if (!m) return res.status(404).json({ erro: 'Mercado não encontrado.' });
-    const hoje = new Date().toISOString().slice(0, 10);
+    const hoje = U.hojeISO();
     const promocoes = await db.all(`SELECT id,titulo,descricao,preco,preco_original,validade FROM promocoes
       WHERE mercado_id=? AND ativo=1 AND (validade IS NULL OR validade >= ?) ORDER BY id DESC LIMIT 30`, [m.id, hoje]);
     res.set('Cache-Control', 'no-store').json({ mercado: m.nome, whatsapp: m.whatsapp, promocoes });
@@ -81,7 +85,16 @@ module.exports = function registraApp({ app, api, db, baseUrl }) {
       icons: [{ src: '/assets/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/assets/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }],
     });
   });
-  app.get('/sw.js', (req, res) => res.type('application/javascript').set('Cache-Control', 'no-store')
-    .send("self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('fetch',()=>{});"));
+  // service worker: guarda estilos e ícones no aparelho (abre mais rápido, inclusive com internet ruim).
+  // Os dados da conta NUNCA ficam em cache: sempre vêm do servidor.
+  const SW = `const C='cad-v5';
+self.addEventListener('install',()=>self.skipWaiting());
+self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>clients.claim())));
+self.addEventListener('fetch',e=>{const u=new URL(e.request.url);
+  if(e.request.method!=='GET'||u.origin!==location.origin||!u.pathname.startsWith('/assets/'))return;
+  e.respondWith(caches.open(C).then(async c=>{const hit=await c.match(e.request);
+    const rede=fetch(e.request).then(r=>{if(r.ok)c.put(e.request,r.clone());return r}).catch(()=>hit);
+    return hit||rede}));});`;
+  app.get('/sw.js', (req, res) => res.type('application/javascript').set('Cache-Control', 'no-store').send(SW));
   app.use('/assets', express.static(path.join(PUB, 'assets'), { maxAge: '7d' }));
 };

@@ -2,227 +2,617 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#070d1a">
+<meta name="robots" content="noindex,nofollow">
 <title>Caderneta — Painel</title>
 <link rel="icon" href="/assets/icon-192.png">
-<link rel="stylesheet" href="/assets/ui.css">
+<link rel="apple-touch-icon" href="/assets/icon-192.png">
+<link rel="stylesheet" href="/assets/ui.css?v=5">
 </head>
 <body>
+<div id="offline" role="status">Sem internet. As alterações não serão salvas até a conexão voltar.</div>
 <div class="wrap wide" id="root"></div>
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite"></div>
 <script>
-const $ = s => document.querySelector(s);
-const brl = c => (c/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
-const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const ini = n => String(n).trim().split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase();
-const dt = d => d ? new Date(d.replace(' ','T')+'Z').toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
-let T = (()=>{try{return localStorage.getItem('tk')}catch(e){return null}})(), tab='clientes', sel=null, busca='', cache={};
+'use strict';
+/* ====================== utilidades ====================== */
+const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const brl = c => (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const reais = c => (c / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ini = n => String(n || '?').trim().split(/\s+/).slice(0, 2).map(x => x[0]).join('').toUpperCase();
+const utc = d => new Date(String(d).replace(' ', 'T') + 'Z');
+const dt = d => d ? utc(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+const dataBR = iso => iso ? iso.split('-').reverse().join('/') : '';
+const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
+const loc = { get: k => { try { return localStorage.getItem(k) } catch { return null } }, set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v) } catch {} } };
+const vibra = () => { try { navigator.vibrate && navigator.vibrate(15) } catch {} };
+const S = { tk: loc.get('tk'), eu: null, mercado: null, cont: {}, cl: { q: '', filtro: '', itens: [], total: 0 }, ext: null, prod: { q: '' } };
+const dono = () => S.eu?.papel === 'dono';
 
-/* ---------- utilidades de UI ---------- */
-function toast(m){ const t=$('#toast'); t.textContent=m; t.className='on'; clearTimeout(toast.t); toast.t=setTimeout(()=>t.className='',2600); }
-function modal(html){ return new Promise(res=>{ const o=document.createElement('div'); o.className='ov'; o.innerHTML=`<div class="md">${html}</div>`; document.body.appendChild(o);
-  const close=v=>{o.remove();res(v)}; o.addEventListener('mousedown',e=>{if(e.target===o)close(null)}); o._close=close; o.querySelector('[data-x]')?.addEventListener('click',()=>close(null)); o._el=o; modal.cur=o; }); }
-// formulário em janela: campos [{id,label,type,value,ph,hint,opts}] -> objeto ou null
-function form(titulo, campos, {ok='Salvar',sub=''}={}){
-  const html=`<h3>${esc(titulo)}</h3>${sub?`<div class="muted small">${sub}</div>`:''}<form id="mf">${campos.map(c=>`<label class="f" for="mf_${c.id}">${esc(c.label)}</label>`+
-    (c.type==='select'?`<select id="mf_${c.id}">${c.opts.map(o=>`<option ${o===c.value?'selected':''}>${esc(o)}</option>`).join('')}</select>`
-    :c.type==='check'?`<label style="display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" id="mf_${c.id}" ${c.value?'checked':''}> <span class="small muted">${esc(c.ph||'')}</span></label>`
-    :`<input id="mf_${c.id}" type="${c.type||'text'}" value="${esc(c.value??'')}" placeholder="${esc(c.ph||'')}" ${c.mode?`inputmode="${c.mode}"`:''} autocomplete="off">`)+
-    (c.hint?`<div class="hint">${esc(c.hint)}</div>`:'')).join('')}
-    <div class="acts"><button type="button" class="btn sec" data-x>Cancelar</button><button class="btn">${esc(ok)}</button></div></form>`;
-  const p=modal(html); const o=modal.cur;
-  setTimeout(()=>o.querySelector('input,select')?.focus(),30);
-  o.querySelector('#mf').addEventListener('submit',e=>{e.preventDefault(); const v={}; for(const c of campos){const el=o.querySelector('#mf_'+c.id); v[c.id]=c.type==='check'?el.checked:el.value.trim();} o._close(v);});
-  return p;
-}
-function confirma(titulo,texto,{ok='Confirmar',danger=false}={}){
-  const p=modal(`<h3>${esc(titulo)}</h3><p class="muted" style="line-height:1.5">${texto}</p><div class="acts"><button class="btn sec" data-x>Cancelar</button><button class="btn ${danger?'danger':''}" id="yes">${esc(ok)}</button></div>`);
-  modal.cur.querySelector('#yes').onclick=()=>modal.cur._close(true); return p.then(v=>!!v);
-}
-function info(html){ const p=modal(html); return p; }
+function toast(m, tipo = '') { const t = $('#toast'); t.textContent = m; t.className = 'on ' + tipo; clearTimeout(toast.t); toast.t = setTimeout(() => t.className = '', tipo === 'erro' ? 4200 : 2600); }
+const run = async fn => { try { return await fn() } catch (e) { if (e.message !== 'auth') toast(e.message || 'Algo deu errado.', 'erro') } };
 
-/* ---------- API ---------- */
-async function api(path, opt={}){
-  const r = await fetch('/api'+path,{method:opt.method||'GET',headers:{'content-type':'application/json',authorization:'Bearer '+T},body:opt.body?JSON.stringify(opt.body):undefined});
-  const j = await r.json().catch(()=>({}));
-  if(r.status===401){ try{localStorage.removeItem('tk')}catch(e){} T=null; render(); throw new Error('auth'); }
-  if(!r.ok) throw Object.assign(new Error(j.erro||'Erro'),{data:j,status:r.status});
+/* ====================== API ====================== */
+async function api(path, { method = 'GET', body, raw } = {}) {
+  let r;
+  try {
+    r = await fetch('/api' + path, { method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), authorization: 'Bearer ' + S.tk }, body: body ? JSON.stringify(body) : undefined });
+  } catch { throw new Error('Sem conexão com o servidor. Verifique a internet.') }
+  if (r.status === 401) { sairLocal('Sua sessão terminou. Entre novamente.'); throw new Error('auth') }
+  if (raw) { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erro || 'Erro'); return r }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(j.erro || 'Erro'), { data: j, status: r.status });
   return j;
 }
-const run = async fn => { try{ return await fn(); }catch(e){ if(e.message!=='auth') toast(e.message); } };
+async function baixa(path) {
+  const r = await api(path, { raw: true });
+  const nome = (r.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'arquivo';
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(await r.blob()), download: nome });
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  toast('Arquivo baixado ✓', 'ok');
+}
+// Abre o WhatsApp numa aba já reservada no clique (celulares bloqueiam janelas abertas depois de um "await")
+async function abreWa(pegaLink) {
+  const w = window.open('', '_blank');
+  try { const link = await pegaLink(); if (w) w.location.href = link; else location.href = link; return true }
+  catch (e) { if (w) w.close(); throw e }
+}
+const copia = t => navigator.clipboard.writeText(t).then(() => toast('Copiado ✓', 'ok'), () => toast('Não deu para copiar. Selecione e copie manualmente.', 'erro'));
 
-/* ---------- login ---------- */
-function login(){
-  $('#root').innerHTML = `<div style="max-width:400px;margin:8vh auto 0"><div class="brand" style="margin-bottom:18px"><div class="logo">C</div><div><h2>Caderneta</h2><div class="muted small">Fiado, promoções e Pix em um só lugar</div></div></div>
-  <div class="card"><label class="f">Email</label><input id="em" type="email" autocomplete="username">
-  <label class="f">Senha</label><input id="se" type="password" autocomplete="current-password">
-  <button class="btn block" style="margin-top:16px" onclick="entrar()">Entrar</button>
-  <button class="btn sec block" style="margin-top:8px" onclick="criar()">Criar conta do mercado</button></div></div>`;
-  $('#se').addEventListener('keydown',e=>{if(e.key==='Enter')entrar()});
+/* ====================== janelas (modal) ====================== */
+function modal(html, { aoAbrir } = {}) {
+  return new Promise(res => {
+    const o = document.createElement('div'); o.className = 'ov';
+    o.innerHTML = `<div class="md" role="dialog" aria-modal="true">${html}</div>`;
+    document.body.appendChild(o); document.body.classList.add('travado');
+    const voltarFoco = document.activeElement;
+    const fecha = v => {
+      if (o._fechado) return; o._fechado = true; o.classList.add('saindo');
+      setTimeout(() => { o.remove(); if (!$('.ov')) document.body.classList.remove('travado'); }, 150);
+      try { voltarFoco && voltarFoco.focus({ preventScroll: true }) } catch {}
+      o._aoFechar && o._aoFechar(); res(v);
+    };
+    o._fecha = fecha;
+    o.addEventListener('mousedown', e => { if (e.target === o) fecha(null) });
+    $$('[data-x]', o).forEach(b => b.addEventListener('click', () => fecha(null)));
+    aoAbrir && aoAbrir(o, fecha);
+  });
 }
-async function entrar(){
-  const r = await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:$('#em').value,senha:$('#se').value})});
-  const j = await r.json(); if(!r.ok) return toast(j.erro);
-  T=j.token; try{localStorage.setItem('tk',T)}catch(e){} render();
-}
-async function criar(){
-  const email=$('#em').value, senha=$('#se').value;
-  const v=await form('Criar conta',[{id:'nome',label:'Nome do mercado',ph:'Ex.: Mercadinho do Zé'}],{ok:'Criar conta',sub:'Use o email e a senha (mín. 8 caracteres) digitados na tela anterior.'}); if(!v||!v.nome) return;
-  const r = await fetch('/api/registro',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({nome:v.nome,email,senha})});
-  const j = await r.json(); if(!r.ok) return toast(j.erro);
-  T=j.token; try{localStorage.setItem('tk',T)}catch(e){} render();
-}
-function sair(){ try{localStorage.removeItem('tk')}catch(e){} T=null; render(); }
+addEventListener('keydown', e => { if (e.key === 'Escape') { const o = $$('.ov:not(.saindo)').pop(); if (o) o._fecha(null) } });
 
-/* ---------- casca ---------- */
-async function render(){
-  if(!T) return login();
-  let nome='Caderneta', pend=0, avisos=0;
-  try{ const [m,pc,av]=await Promise.all([api('/mercado'),api('/pagamentos-informados?status=pendente'),api('/contestacoes')]); nome=m.nome; pend=pc.length; avisos=av.length; cache.m=m; }catch(e){ if(e.message==='auth') return; }
-  const tabs=[['clientes','Clientes'],['comprov','Comprovantes',pend],['promos','Promoções'],['validade','Validade'],['produtos','Produtos'],['avisos','Avisos',avisos],['config','Config']];
-  $('#root').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div class="brand"><div class="logo">${esc(ini(nome))}</div><div><b>${esc(nome)}</b><div class="muted tiny">Painel do mercado</div></div></div><button class="btn sec sm" onclick="sair()">Sair</button></div>
-  <div class="nav">${tabs.map(([k,n,b])=>`<button class="${tab===k?'on':''}" onclick="tab='${k}';sel=null;render()">${n}${b?`<span class="badge">${b}</span>`:''}</button>`).join('')}</div><div id="v"><div class="card"><div class="sk" style="width:60%"></div></div></div>`;
-  await run(({clientes:vClientes,comprov:vComprov,promos:vPromos,validade:vValidade,produtos:vProdutos,avisos:vAvisos,config:vConfig})[tab]);
+function campo(c) {
+  const id = 'f_' + c.id, ph = c.ph ? ` placeholder="${esc(c.ph)}"` : '', v = esc(c.value ?? '');
+  const lab = c.type === 'check' ? '' : `<label class="f" for="${id}">${esc(c.label)}</label>`;
+  let el;
+  if (c.type === 'html') return c.html;
+  if (c.type === 'select') el = `<select id="${id}">${c.opts.map(o => { const [val, txt] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(val)}" ${String(val) === String(c.value ?? '') ? 'selected' : ''}>${esc(txt)}</option>` }).join('')}</select>`;
+  else if (c.type === 'check') el = `<label class="check"><input type="checkbox" id="${id}" ${c.value ? 'checked' : ''}><span class="small muted">${esc(c.label)}</span></label>`;
+  else if (c.type === 'textarea') el = `<textarea id="${id}"${ph} rows="3" maxlength="${c.max || 500}">${v}</textarea>`;
+  else if (c.type === 'money') el = `<input id="${id}" data-money inputmode="numeric" autocomplete="off" value="${c.value != null && c.value !== '' ? esc(reais(c.value)) : ''}"${ph || ' placeholder="0,00"'}>`;
+  else el = `<input id="${id}" type="${c.type || 'text'}" value="${v}"${ph} ${c.mode ? `inputmode="${c.mode}"` : ''} autocomplete="${c.auto || 'off'}" ${c.max ? `maxlength="${c.max}"` : ''}>`;
+  return lab + el + (c.hint ? `<div class="hint">${esc(c.hint)}</div>` : '');
 }
+// valor em reais enquanto digita: "1" -> 0,01 ... "123456" -> 1.234,56
+function mascaraMoeda(el) {
+  const fmt = () => { const d = el.value.replace(/\D/g, '').replace(/^0+/, '').slice(0, 11); el.value = d ? (Number(d) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : '' };
+  el.addEventListener('input', fmt);
+}
+// formulário em janela. Se "enviar" falhar, a janela continua aberta e mostra o erro.
+function form(titulo, campos, { ok = 'Salvar', sub = '', enviar, perigo = false } = {}) {
+  const html = `<h3>${esc(titulo)}</h3>${sub ? `<div class="muted small" style="line-height:1.5">${sub}</div>` : ''}
+    <form novalidate>${campos.map(campo).join('')}<div class="err small bad" role="alert"></div>
+    <div class="acts"><button type="button" class="btn sec" data-x>Cancelar</button><button class="btn ${perigo ? 'danger' : ''}" type="submit">${esc(ok)}</button></div></form>`;
+  return modal(html, { aoAbrir: (o, fecha) => {
+    const f = $('form', o), err = $('.err', o), btn = $('button[type=submit]', f);
+    $$('[data-money]', o).forEach(mascaraMoeda);
+    setTimeout(() => { const el = $('input:not([type=checkbox]),select,textarea', o); if (el) { el.focus(); el.select && el.select() } }, 60);
+    f.addEventListener('submit', async e => {
+      e.preventDefault(); err.textContent = '';
+      const v = {};
+      for (const c of campos) { if (c.type === 'html') continue; const el = $('#f_' + c.id, o); v[c.id] = c.type === 'check' ? el.checked : el.value.trim() }
+      const falta = campos.find(c => c.req && !v[c.id]);
+      if (falta) { err.textContent = `Preencha: ${falta.label}`; $('#f_' + falta.id, o).focus(); return }
+      if (!enviar) return fecha(v);
+      btn.disabled = true; btn.classList.add('carregando');
+      try { const r = await enviar(v); fecha(r === undefined ? v : r) }
+      catch (x) { if (x.message !== 'auth') err.textContent = x.message; btn.disabled = false; btn.classList.remove('carregando') }
+    });
+  } });
+}
+function confirma(titulo, texto, { ok = 'Confirmar', perigo = false } = {}) {
+  return modal(`<h3>${esc(titulo)}</h3><p class="muted" style="line-height:1.5">${texto}</p><div class="acts"><button class="btn sec" data-x>Cancelar</button><button class="btn ${perigo ? 'danger' : ''}" data-sim>${esc(ok)}</button></div>`,
+    { aoAbrir: (o, fecha) => { const b = $('[data-sim]', o); b.onclick = () => fecha(true); setTimeout(() => b.focus(), 60) } }).then(v => !!v);
+}
+
+/* ====================== login ====================== */
+function login(msg) {
+  let modo = 'entrar';
+  $('#root').innerHTML = `<div class="entra" style="max-width:400px;margin:8vh auto 0">
+    <div class="brand" style="margin-bottom:18px"><div class="logo">C</div><div><h2>Caderneta</h2><div class="muted small">Fiado, promoções e Pix em um só lugar</div></div></div>
+    <form class="card" id="fl" novalidate>
+      <div class="tabs"><button type="button" class="on" data-m="entrar">Entrar</button><button type="button" data-m="criar">Criar conta</button></div>
+      <div id="cnome" style="display:none"><label class="f" for="nm">Nome do mercado</label><input id="nm" placeholder="Ex.: Mercadinho do Zé" autocomplete="organization"></div>
+      <label class="f" for="em">Email</label><input id="em" type="email" autocomplete="username" inputmode="email">
+      <label class="f" for="se">Senha</label><input id="se" type="password" autocomplete="current-password">
+      <button class="btn block" id="go" style="margin-top:16px">Entrar</button>
+      <div id="lerr" class="small bad" role="alert" style="min-height:18px;margin-top:10px">${esc(msg || '')}</div>
+      <button type="button" class="btn link" id="esq" style="display:block;margin:0 auto">Esqueci a senha</button>
+    </form></div>`;
+  const setModo = m => { modo = m; $$('[data-m]').forEach(b => b.className = b.dataset.m === m ? 'on' : ''); $('#cnome').style.display = m === 'criar' ? 'block' : 'none';
+    $('#go').textContent = m === 'criar' ? 'Criar conta do mercado' : 'Entrar'; $('#se').autocomplete = m === 'criar' ? 'new-password' : 'current-password'; $('#lerr').textContent = ''; $(m === 'criar' ? '#nm' : '#em').focus() };
+  $$('[data-m]').forEach(b => b.onclick = () => setModo(b.dataset.m));
+  $('#esq').onclick = () => modal(`<h3>Esqueci a senha</h3><p class="muted" style="line-height:1.6">Se você é <b>caixa</b>, peça ao dono do mercado: em <i>Config → Equipe</i> ele redefine a sua senha.<br><br>Se você é o <b>dono</b>, fale com quem administra o sistema (suporte) para redefinir o acesso.</p><div class="acts"><button class="btn" data-x>Entendi</button></div>`);
+  $('#fl').onsubmit = async e => {
+    e.preventDefault(); const b = $('#go'); b.disabled = true; b.classList.add('carregando'); $('#lerr').textContent = '';
+    try {
+      const body = { email: $('#em').value.trim(), senha: $('#se').value, ...(modo === 'criar' ? { nome: $('#nm').value.trim() } : {}) };
+      const r = await fetch(modo === 'criar' ? '/api/registro' : '/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.erro || 'Erro');
+      S.tk = j.token; loc.set('tk', S.tk); await inicia();
+    } catch (x) { $('#lerr').textContent = x.message === 'Failed to fetch' ? 'Sem conexão.' : x.message; b.disabled = false; b.classList.remove('carregando') }
+  };
+  setTimeout(() => $('#em').focus(), 50);
+}
+function sairLocal(msg) { S.tk = null; S.eu = null; loc.set('tk', null); $$('.ov').forEach(o => o.remove()); document.body.classList.remove('travado'); history.replaceState(null, '', '/painel'); login(msg) }
+
+/* ====================== casca + rotas ====================== */
+const ABAS = [
+  ['clientes', 'Clientes'], ['comprovantes', 'Comprovantes', 'comprovantes'], ['avisos', 'Avisos', 'avisos'], ['promocoes', 'Promoções'],
+  ['validade', 'Validade', 'validade'], ['produtos', 'Produtos'], ['relatorios', 'Relatórios', null, true], ['config', 'Config'],
+];
+async function inicia() {
+  try { [S.eu, S.mercado] = await Promise.all([api('/eu'), api('/mercado')]) } catch (e) { if (e.message !== 'auth') login(e.message); return }
+  $('#root').innerHTML = `<header class="topo np"><div class="brand"><div class="logo">${esc(ini(S.mercado.nome))}</div><div><b id="mnome">${esc(S.mercado.nome)}</b>
+      <div class="who muted tiny">${esc(S.eu.nome)} <span class="papel">${dono() ? 'dono' : 'caixa'}</span></div></div></div>
+      <button class="btn sec sm" data-a="sair">Sair</button></header>
+    <nav class="nav np" id="nav" aria-label="Seções"></nav><main id="v"></main>`;
+  pintaNav(); contadores(); rota();
+}
+// a barra de abas é criada uma vez; depois só mudam a aba ativa e os números (não perde a rolagem)
+function pintaNav() {
+  const nav = $('#nav'); if (!nav) return;
+  const atual = (location.hash.replace(/^#\/?/, '').split('/')[0]) || 'clientes';
+  if (!nav.children.length) nav.innerHTML = ABAS.filter(a => !a[3] || dono()).map(([k, n]) => `<a href="#/${k}" data-aba="${k}">${n}<span class="badge" hidden></span></a>`).join('');
+  for (const a of nav.children) {
+    const on = a.dataset.aba === atual, c = ABAS.find(x => x[0] === a.dataset.aba)[2], b = a.querySelector('.badge');
+    a.classList.toggle('on', on); on ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');
+    b.hidden = !(c && S.cont[c]); b.textContent = c ? S.cont[c] || '' : '';
+    if (on && (a.offsetLeft < nav.scrollLeft || a.offsetLeft + a.offsetWidth > nav.scrollLeft + nav.clientWidth)) nav.scrollLeft = a.offsetLeft - 16;
+  }
+}
+async function contadores() { try { S.cont = await api('/contadores'); if ($('#nav')) pintaNav() } catch {} }
+setInterval(() => { if (S.tk && document.visibilityState === 'visible') contadores() }, 45000);
+document.addEventListener('visibilitychange', () => { if (S.tk && document.visibilityState === 'visible') contadores() });
+addEventListener('online', () => $('#offline').classList.remove('on')); addEventListener('offline', () => $('#offline').classList.add('on'));
+
+let seq = 0;
+const esqueleto = () => `<div class="card"><div class="sk" style="width:40%"></div><div class="sk" style="width:75%;margin-top:14px"></div><div class="sk" style="width:60%;margin-top:14px"></div></div>`;
+// troca de tela: só mostra "carregando" se demorar; quando o usuário já navegou para outra tela, descarta a resposta velha
+async function rota({ suave = false } = {}) {
+  if (!S.tk || !S.eu) return;
+  const [aba, arg] = location.hash.replace(/^#\/?/, '').split('/');
+  const nome = VIEWS[aba] && (!ABAS.find(a => a[0] === aba)?.[3] || dono()) ? aba : 'clientes';
+  if (nome !== aba && aba) { history.replaceState(null, '', '#/' + nome); return rota() }
+  pintaNav();
+  const meu = ++seq, v = $('#v'), y = scrollY;
+  const t = suave ? null : setTimeout(() => { if (meu === seq) v.innerHTML = esqueleto() }, 160);
+  try {
+    const view = VIEWS[nome];
+    const dados = await view.carrega(arg);
+    if (meu !== seq) return;
+    clearTimeout(t);
+    v.innerHTML = view.html(dados, arg);
+    if (!suave) { v.classList.remove('entra'); void v.offsetWidth; v.classList.add('entra'); scrollTo({ top: 0, behavior: 'instant' }) } else scrollTo({ top: y, behavior: 'instant' });
+    view.liga && view.liga(dados, arg);
+  } catch (e) {
+    clearTimeout(t);
+    if (e.message !== 'auth' && meu === seq) v.innerHTML = `<div class="card empty"><b>⚠️</b>${esc(e.message)}<br><button class="btn sec sm" style="margin-top:12px" data-a="recarregar">Tentar de novo</button></div>`;
+  }
+}
+const atualiza = () => { contadores(); return rota({ suave: true }) };
+addEventListener('hashchange', () => rota());
+
+// cliques: [data-a] chama uma ação; [data-href] navega
+document.addEventListener('click', e => {
+  const a = e.target.closest('[data-a]');
+  if (a) { e.preventDefault(); e.stopPropagation(); const fn = ACOES[a.dataset.a]; if (fn) run(() => fn(a.dataset, a)); return }
+  const h = e.target.closest('[data-href]'); if (h) location.hash = h.dataset.href;
+});
+document.addEventListener('keydown', e => {
+  const h = e.target.closest?.('[data-href]'); if (h && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); location.hash = h.dataset.href }
+  if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && $('#bq')) { e.preventDefault(); $('#bq').focus() }
+});
+
+/* ====================== telas ====================== */
+const vazio = (emoji, txt) => `<div class="empty"><b>${emoji}</b>${txt}</div>`;
+const secao = (titulo, botao = '') => `<div class="sec-h"><div class="cap">${titulo}</div>${botao}</div>`;
+const VIEWS = {};
 
 /* ---------- clientes ---------- */
-async function vClientes(){
-  if(sel) return vExtrato();
-  const [r,cs] = await Promise.all([api('/resumo'),api('/clientes')]); cache.cs=cs;
-  $('#v').innerHTML = `<div class="hero"><div class="lbl">Total a receber (fiado em aberto)</div><div class="val ${r.total_a_receber>0?'bad':'ok'}">${brl(r.total_a_receber)}</div>
-    <div class="muted small" style="margin-top:6px">${r.clientes_devendo} cliente(s) devendo</div></div>
-  <div class="stat" style="margin-top:12px"><div class="card"><div class="lbl">Fiado no mês</div><div class="val">${brl(r.fiado_no_mes)}</div></div>
-    <div class="card"><div class="lbl">Recebido no mês</div><div class="val ok">${brl(r.recebido_no_mes)}</div></div></div>
-  <div class="cap">Clientes</div>
-  <div style="display:flex;gap:8px"><input id="bq" placeholder="Buscar cliente…" value="${esc(busca)}" style="flex:1"><button class="btn" onclick="novoCliente()">+ Novo</button></div>
-  <div class="card list" id="lista" style="margin-top:12px"></div>`;
-  $('#bq').oninput=e=>{busca=e.target.value;pintaLista()}; pintaLista();
+async function buscaClientes(offset = 0) {
+  const p = new URLSearchParams({ q: S.cl.q, limit: 50, offset });
+  if (S.cl.filtro === 'devendo') p.set('devendo', '1'); if (S.cl.filtro === 'arquivados') p.set('arquivados', '1');
+  const r = await api('/clientes?' + p, { raw: true });
+  const itens = await r.json();
+  S.cl.total = Number(r.headers.get('x-total-count') || itens.length);
+  S.cl.itens = offset ? S.cl.itens.concat(itens) : itens;
 }
-function pintaLista(){
-  const q=busca.toLowerCase(), cs=(cache.cs||[]).filter(c=>c.nome.toLowerCase().includes(q));
-  $('#lista').innerHTML = cs.length? cs.map(c=>`<div class="it click" onclick="sel=${c.id};render()"><div class="av">${esc(ini(c.nome))}</div>
-    <div class="main"><div class="t">${esc(c.nome)}</div><div class="s">${esc(c.telefone||'sem telefone')}${c.ativado_em?' · <span class="ok">app ativo</span>':''}</div></div>
-    <div class="amt ${c.saldo>0?'bad':'ok'}">${brl(c.saldo)}</div></div>`).join('')
-    : `<div class="empty"><b>📒</b>${busca?'Nenhum cliente com esse nome.':'Nenhum cliente ainda. Toque em “+ Novo”.'}</div>`;
+const linhaCliente = c => `<div class="it click" data-href="/clientes/${c.id}" tabindex="0" role="link">
+  <div class="av">${esc(ini(c.nome))}</div>
+  <div class="main"><div class="t">${esc(c.nome)}</div><div class="s">${esc(c.telefone || 'sem telefone')}${c.ativado_em ? ' · <span class="ok">app ativo</span>' : ''}${c.dia_vencimento ? ` · vence dia ${c.dia_vencimento}` : ''}</div></div>
+  <div class="amt ${c.saldo > 0 ? 'bad' : 'ok'}">${brl(c.saldo)}</div>
+  ${c.ativo ? `<button class="btn sec ico np" data-a="compra" data-id="${c.id}" data-nome="${esc(c.nome)}" title="Lançar compra fiada" aria-label="Lançar compra para ${esc(c.nome)}">+</button>` : ''}</div>`;
+function pintaLista() {
+  const L = $('#lista'); if (!L) return;
+  const { itens, total, q, filtro } = S.cl;
+  L.innerHTML = itens.length ? itens.map(linhaCliente).join('') : vazio('📒', q ? 'Nenhum cliente encontrado.' : filtro === 'devendo' ? 'Ninguém devendo. 🎉' : filtro === 'arquivados' ? 'Nenhum cliente arquivado.' : 'Nenhum cliente ainda. Toque em “+ Novo”.');
+  $('#cnt').textContent = itens.length ? `${itens.length < total ? `${itens.length} de ` : ''}${plural(total, 'cliente', 'clientes')}` : '';
+  $('#mais').style.display = itens.length < total ? '' : 'none';
 }
-const novoCliente = () => run(async()=>{
-  const v=await form('Novo cliente',[{id:'nome',label:'Nome',ph:'Ex.: Dona Maria'},{id:'telefone',label:'WhatsApp (com DDD)',ph:'81 99999-9999',type:'tel',mode:'tel'},{id:'limite',label:'Limite de fiado (R$)',value:'0',mode:'decimal',hint:'0 = sem limite'},{id:'aceitou',label:'Aviso de privacidade (LGPD)',type:'check',ph:'O cliente foi avisado que a conta dele pode ser consultada pelo app e concordou'}],{ok:'Cadastrar'});
-  if(!v||!v.nome) return; await api('/clientes',{method:'POST',body:v}); toast('Cliente cadastrado'); render();
-});
-async function vExtrato(){
-  const e = await api(`/clientes/${sel}/extrato`); const c=e.cliente; cache.e=e;
-  $('#v').innerHTML = `<button class="btn link" onclick="sel=null;render()">← Voltar</button>
-  <div class="hero" style="margin-top:6px"><div style="display:flex;gap:12px;align-items:center"><div class="av" style="width:46px;height:46px">${esc(ini(c.nome))}</div><div><b style="font-size:18px">${esc(c.nome)}</b><div class="muted small">${esc(c.telefone||'sem telefone')}${c.limite?` · limite ${brl(c.limite)}`:''}</div></div></div>
-    <div class="val ${e.saldo>0?'bad':'ok'}" style="margin-top:14px">${brl(e.saldo)}</div><div class="lbl">${e.saldo>0?'deve ao mercado':(e.saldo<0?'crédito do cliente':'conta em dia')}</div></div>
-  <div class="row-btns" style="margin-top:12px"><button class="btn" onclick="compra()">+ Compra fiada</button><button class="btn good" onclick="pagto()">Receber pagamento</button>
-    <button class="btn sec" onclick="cobrar()">Cobrar no WhatsApp</button><button class="btn sec" onclick="codigoApp()">${c.ativado_em?'Redefinir acesso ao app':'Convidar para o app'}</button></div>
-  <div class="card" style="margin-top:12px"><div class="muted small">Link pessoal do cliente</div><div class="row-btns" style="margin-top:8px"><a class="btn sec sm" target="_blank" href="${esc(c.url)}">abrir</a>
-    <button class="btn sec sm" onclick="copia('${esc(c.url)}')">copiar</button><button class="btn sec sm" onclick="novoLink()">gerar novo link</button><button class="btn sec sm" onclick="editaCliente()">editar</button></div></div>
-  <div class="cap">Histórico</div><div class="card list">${e.lancamentos.map(l=>`<div class="it"><div class="main"><div class="t">${{compra:'Compra fiada',pagamento:'Pagamento',ajuste:'Ajuste'}[l.tipo]} ${l.contestado?'<span class="chip bad">contestado</span>':''}</div>
-    <div class="s">${dt(l.criado_em)}${l.descricao?' · '+esc(l.descricao):''}${l.forma?' · '+esc(l.forma):''}</div></div>
-    <div style="text-align:right"><div class="amt ${l.valor<0?'ok':'bad'}">${brl(l.valor)}</div><button class="btn link" onclick="estorna(${l.id})">estornar</button></div></div>`).join('')||'<div class="empty"><b>🧾</b>Sem lançamentos.</div>'}</div>`;
-}
-const copia = t => navigator.clipboard.writeText(t).then(()=>toast('Copiado ✓'));
-const compra = () => run(async()=>{
-  const v=await form('Compra fiada',[{id:'valor',label:'Valor (R$)',mode:'decimal',ph:'0,00'},{id:'descricao',label:'Itens (opcional)',ph:'arroz, feijão…'}],{ok:'Lançar'}); if(!v||!v.valor) return;
-  try{ await api(`/clientes/${sel}/compras`,{method:'POST',body:v}); }
-  catch(e){ if(e.data?.codigo==='LIMITE'){ if(await confirma('Passa do limite',esc(e.message)+'<br>Lançar mesmo assim?',{ok:'Lançar mesmo assim'})) await api(`/clientes/${sel}/compras`,{method:'POST',body:{...v,forcar:true}}); else return; } else throw e; }
-  toast('Compra lançada'); render();
-});
-const pagto = () => run(async()=>{
-  const v=await form('Receber pagamento',[{id:'valor',label:'Valor recebido (R$)',mode:'decimal'},{id:'forma',label:'Forma',type:'select',opts:['pix','dinheiro','cartão'],value:'pix'}],{ok:'Registrar'}); if(!v||!v.valor) return;
-  await api(`/clientes/${sel}/pagamentos`,{method:'POST',body:v}); toast('Pagamento registrado'); render();
-});
-const estorna = id => run(async()=>{
-  const v=await form('Estornar lançamento',[{id:'motivo',label:'Motivo',ph:'Ex.: valor digitado errado'}],{ok:'Estornar',sub:'Cria um lançamento inverso. O histórico não é apagado.'}); if(!v) return;
-  await api(`/lancamentos/${id}/estornar`,{method:'POST',body:v}); toast('Estornado'); render();
-});
-const cobrar = () => run(async()=>{ const r=await api(`/clientes/${sel}/cobrar`,{method:'POST'}); window.open(r.link_wa,'_blank'); });
-const novoLink = () => run(async()=>{ if(!await confirma('Gerar novo link','O link antigo (e o login do app deste cliente neste aparelho) deixa de funcionar.',{ok:'Gerar',danger:true})) return;
-  const r=await api(`/clientes/${sel}/novo-link`,{method:'POST'}); await info(`<h3>Novo link</h3><p class="muted small" style="word-break:break-all">${esc(r.url)}</p><div class="acts"><button class="btn" onclick="copia('${esc(r.url)}')">Copiar</button><button class="btn sec" data-x>Fechar</button></div>`); render(); });
-const editaCliente = () => run(async()=>{ const c=cache.e.cliente;
-  const v=await form('Editar cliente',[{id:'nome',label:'Nome',value:c.nome},{id:'telefone',label:'WhatsApp (com DDD)',value:c.telefone||'',mode:'tel'},{id:'limite',label:'Limite de fiado (R$)',value:(c.limite/100).toFixed(2).replace('.',','),mode:'decimal'}]); if(!v) return;
-  await api(`/clientes/${sel}`,{method:'PATCH',body:v}); toast('Salvo'); render(); });
-const codigoApp = () => run(async()=>{
-  const r=await api(`/clientes/${sel}/codigo-acesso`,{method:'POST'});
-  window.__convite=r;
-  await info(`<h3>Convite para o app</h3><p class="muted small">Passe este código ao cliente. Ele vale 7 dias e só funciona uma vez.</p><div class="code">${esc(r.codigo)}</div>
-   <div class="hint" style="text-align:center">Endereço: ${esc(r.url_app)}</div><div class="acts" style="flex-direction:column"><button class="btn good" onclick="window.open(window.__convite.link_wa,'_blank')">Enviar convite pelo WhatsApp</button><button class="btn sec" onclick="copia('${esc(r.codigo)}')">Copiar código</button><button class="btn sec" data-x>Fechar</button></div>`);
-});
+VIEWS.clientes = {
+  carrega: async arg => arg ? VIEWS.extrato.carrega(arg) : Promise.all([api('/resumo'), buscaClientes()]).then(([r]) => r),
+  html: (r, arg) => arg ? VIEWS.extrato.html(r) : `
+    <div class="hero"><div class="lbl">Total a receber (fiado em aberto)</div><div class="val ${r.total_a_receber > 0 ? 'bad' : 'ok'}">${brl(r.total_a_receber)}</div>
+      <div class="linha"><span><b>${r.clientes_devendo}</b> devendo</span><span>recebido hoje <b class="ok">${brl(r.recebido_hoje)}</b></span></div></div>
+    <div class="stat" style="margin-top:12px"><div class="card"><div class="lbl">Fiado no mês</div><div class="val">${brl(r.fiado_no_mes)}</div></div>
+      <div class="card"><div class="lbl">Recebido no mês</div><div class="val ok">${brl(r.recebido_no_mes)}</div></div></div>
+    ${secao('Clientes')}
+    <div class="barra"><div class="busca"><input id="bq" type="search" placeholder="Buscar por nome ou telefone…  ( / )" value="${esc(S.cl.q)}" autocomplete="off" aria-label="Buscar cliente"></div><button class="btn" data-a="novoCliente">+ Novo</button></div>
+    <div class="filtros" role="group" aria-label="Filtro">${[['', 'Todos'], ['devendo', 'Devendo'], ['arquivados', 'Arquivados']].map(([k, n]) => `<button data-a="filtro" data-f="${k}" class="${S.cl.filtro === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+    <div class="card list" id="lista" style="margin-top:12px"></div><div class="contagem" id="cnt"></div>
+    <button class="btn sec sm mais" id="mais" data-a="maisClientes">Carregar mais</button>`,
+  liga: (r, arg) => {
+    if (arg) return;
+    pintaLista();
+    let t; $('#bq').addEventListener('input', e => { clearTimeout(t); S.cl.q = e.target.value; t = setTimeout(() => run(async () => { await buscaClientes(); pintaLista() }), 220) });
+  },
+};
+
+/* ---------- ficha / extrato do cliente ---------- */
+const TIPO = { compra: 'Compra fiada', pagamento: 'Pagamento', ajuste: 'Ajuste' };
+const linhaLanc = l => `<div class="it ${l.estornado ? 'estornado' : ''}" id="l${l.id}"><div class="main">
+    <div class="t">${l.estorno_de ? 'Estorno' : TIPO[l.tipo]} ${l.contestado ? '<span class="chip bad">contestado</span>' : ''}${l.estornado ? ' <span class="chip">estornado</span>' : ''}</div>
+    <div class="s">${dt(l.criado_em)}${l.descricao ? ' · ' + esc(l.descricao) : ''}${l.forma ? ' · ' + esc(l.forma) : ''}${l.usuario ? ` · <span class="quem">por ${esc(l.usuario)}</span>` : ''}</div></div>
+  <div class="dir"><div class="amt ${l.valor < 0 ? 'ok' : 'bad'}">${brl(l.valor)}</div>${dono() && !l.estorno_de && !l.estornado ? `<button class="btn link np" data-a="estorna" data-id="${l.id}">estornar</button>` : ''}</div></div>`;
+VIEWS.extrato = {
+  carrega: async id => { S.ext = await api(`/clientes/${encodeURIComponent(id)}/extrato`); return S.ext },
+  html: e => { const c = e.cliente; return `
+    <div class="so-print"><h2>${esc(S.mercado.nome)} — Extrato</h2><p>Emitido em ${new Date().toLocaleString('pt-BR')}</p></div>
+    <a class="btn link np" href="#/clientes">← Clientes</a>
+    <div class="hero" style="margin-top:6px"><div style="display:flex;gap:12px;align-items:center"><div class="av" style="width:46px;height:46px">${esc(ini(c.nome))}</div>
+      <div style="min-width:0"><b style="font-size:18px">${esc(c.nome)}</b> ${c.ativo ? '' : '<span class="chip">arquivado</span>'}
+      <div class="muted small">${esc(c.telefone || 'sem telefone')}${c.limite ? ` · limite ${brl(c.limite)}` : ''}${c.dia_vencimento ? ` · vence dia ${c.dia_vencimento}` : ''}</div></div></div>
+      <div class="val ${e.saldo > 0 ? 'bad' : 'ok'}" style="margin-top:14px" id="saldo">${brl(e.saldo)}</div><div class="lbl">${e.saldo > 0 ? 'deve ao mercado' : (e.saldo < 0 ? 'crédito do cliente' : 'conta em dia')}</div>
+      ${c.limite && e.saldo > 0 ? `<div class="faixa" style="grid-template-columns:1fr auto;margin-top:12px"><div class="bar"><i style="width:${Math.min(100, Math.round(e.saldo / c.limite * 100))}%;${e.saldo > c.limite ? 'background:var(--warn)' : ''}"></i></div><span class="tiny muted">${Math.round(e.saldo / c.limite * 100)}% do limite</span></div>` : ''}</div>
+    ${c.ativo ? `<div class="row-btns np" style="margin-top:12px"><button class="btn" data-a="compra" data-id="${c.id}">+ Compra fiada</button><button class="btn good" data-a="pagto">Receber pagamento</button>
+      <button class="btn sec" data-a="cobrar">Cobrar no WhatsApp</button><button class="btn sec" data-a="convite">${c.ativado_em ? 'Redefinir acesso ao app' : 'Convidar para o app'}</button></div>` : `<div class="card np" style="margin-top:12px">Cliente arquivado. ${dono() ? '<button class="btn sm" data-a="arquivar" data-v="1">Reativar</button>' : 'Peça ao dono para reativar.'}</div>`}
+    <div class="card np" style="margin-top:12px"><div class="muted small">Link pessoal do cliente (somente leitura)</div><div class="row-btns" style="margin-top:8px">
+      <a class="btn sec sm" target="_blank" rel="noopener" href="${esc(c.url)}">abrir</a><button class="btn sec sm" data-a="copiaLink">copiar</button><button class="btn sec sm" data-a="novoLink">gerar novo link</button>
+      <button class="btn sec sm" data-a="editaCliente">editar</button><button class="btn sec sm" data-a="imprimir">imprimir extrato</button></div></div>
+    ${secao('Histórico')}<div class="card list" id="hist">${e.lancamentos.map(linhaLanc).join('') || vazio('🧾', 'Sem lançamentos.')}</div>
+    <button class="btn sec sm mais" id="maisH" data-a="maisHist" style="${e.tem_mais ? '' : 'display:none'}">Ver lançamentos mais antigos</button>` },
+};
 
 /* ---------- comprovantes ---------- */
-async function vComprov(){
-  const [pend,hist] = await Promise.all([api('/pagamentos-informados?status=pendente'),api('/pagamentos-informados?status=confirmado')]);
-  $('#v').innerHTML = `<div class="cap" style="margin-top:4px">Aguardando conferência (${pend.length})</div><div class="card list">
-  ${pend.map(p=>`<div class="it"><div class="main"><div class="t">${esc(p.cliente_nome)}</div><div class="s">${dt(p.criado_em)} · informou <b class="ok">${brl(p.valor)}</b></div></div>
-    <div class="row-btns"><button class="btn sec sm" onclick="verComp(${p.id})">Ver</button><button class="btn good sm" onclick="confirma2(${p.id},${p.valor})">Confirmar</button><button class="btn danger sm" onclick="recusa(${p.id})">Recusar</button></div></div>`).join('')||'<div class="empty"><b>✅</b>Nada pendente.</div>'}</div>
-  <div class="cap">Confirmados recentemente</div><div class="card list">${hist.slice(0,15).map(p=>`<div class="it"><div class="main"><div class="t">${esc(p.cliente_nome)}</div><div class="s">${dt(p.resolvido_em)}</div></div><div class="amt ok">${brl(p.valor)}</div></div>`).join('')||'<div class="empty">Nenhum ainda.</div>'}</div>`;
-}
-const verComp = id => run(async()=>{
-  const r = await fetch(`/api/pagamentos-informados/${id}/comprovante`,{headers:{authorization:'Bearer '+T}}); if(!r.ok) return toast('Sem comprovante');
-  const url=URL.createObjectURL(await r.blob()); info(`<h3>Comprovante</h3><img src="${url}" style="width:100%;border-radius:12px;margin-top:10px"><div class="acts"><button class="btn sec" data-x>Fechar</button></div>`);
-});
-const confirma2 = (id,valor) => run(async()=>{
-  const v=await form('Confirmar pagamento',[{id:'valor',label:'Valor a abater (R$)',value:(valor/100).toFixed(2).replace('.',','),mode:'decimal',hint:'Confira no app do banco. Corrija se o cliente digitou errado.'}],{ok:'Confirmar e abater'}); if(!v) return;
-  await api(`/pagamentos-informados/${id}/confirmar`,{method:'POST',body:v}); toast('Pagamento confirmado'); render();
-});
-const recusa = id => run(async()=>{
-  const v=await form('Recusar comprovante',[{id:'motivo',label:'Motivo (o cliente verá)',value:'Pagamento não encontrado'}],{ok:'Recusar'}); if(!v) return;
-  await api(`/pagamentos-informados/${id}/recusar`,{method:'POST',body:v}); toast('Recusado'); render();
-});
+VIEWS.comprovantes = {
+  carrega: () => Promise.all([api('/pagamentos-informados?status=pendente'), api('/pagamentos-informados?status=confirmado'), api('/pagamentos-informados?status=recusado')]),
+  html: ([pend, conf, rec]) => `
+    ${secao(`Aguardando conferência (${pend.length})`)}<div class="card list">
+    ${pend.map(p => `<div class="it" id="pi${p.id}"><div class="main"><div class="t">${esc(p.cliente_nome)}</div><div class="s">${dt(p.criado_em)} · informou <b class="ok">${brl(p.valor)}</b></div></div>
+      <div class="acoes"><button class="btn sec sm" data-a="verComp" data-id="${p.id}">Ver</button><button class="btn good sm" data-a="confirmaComp" data-id="${p.id}" data-v="${p.valor}">Confirmar</button><button class="btn danger sm" data-a="recusaComp" data-id="${p.id}">Recusar</button></div></div>`).join('') || vazio('✅', 'Nada pendente.')}</div>
+    <div class="hint" style="margin:8px 2px">Confira no app do banco antes de confirmar. Só a confirmação abate o saldo do cliente.</div>
+    ${secao('Confirmados recentemente')}<div class="card list">${conf.slice(0, 15).map(p => `<div class="it click" data-href="/clientes/${p.cliente_id}"><div class="main"><div class="t">${esc(p.cliente_nome)}</div><div class="s">${dt(p.resolvido_em)}</div></div><div class="amt ok">${brl(p.valor)}</div></div>`).join('') || vazio('', 'Nenhum ainda.')}</div>
+    ${rec.length ? secao('Recusados') + `<div class="card list">${rec.slice(0, 10).map(p => `<div class="it"><div class="main"><div class="t">${esc(p.cliente_nome)}</div><div class="s">${dt(p.resolvido_em)}${p.motivo ? ' · ' + esc(p.motivo) : ''}</div></div><div class="amt muted">${brl(p.valor)}</div></div>`).join('')}</div>` : ''}`,
+};
+
+/* ---------- avisos: contestações + fila de cobranças ---------- */
+VIEWS.avisos = {
+  carrega: () => Promise.all([api('/contestacoes'), api('/notificacoes')]),
+  html: ([k, n]) => `
+    ${secao('Clientes que avisaram “tem algo errado”')}<div class="card list">${k.map(x => `<div class="it" id="k${x.id}"><div class="main"><div class="t click" data-href="/clientes/${x.cliente_id}">${esc(x.cliente_nome)} ${x.lancamento_id ? `<span class="chip">lançamento #${x.lancamento_id}</span>` : ''}</div>
+      <div class="s">${dt(x.criado_em)} · ${esc(x.mensagem || '(sem mensagem)')}</div></div><button class="btn good sm" data-a="resolve" data-id="${x.id}">Resolvido</button></div>`).join('') || vazio('👍', 'Nenhum aviso.')}</div>
+    ${secao(`Cobranças para enviar (${n.length})`, n.length > 1 ? '<span class="tiny dim">toque em “Enviar” em cada uma</span>' : '')}
+    <div class="card list">${n.map(x => `<div class="it" id="n${x.id}"><div class="main"><div class="t">${esc(x.cliente_nome || 'Cliente')} <span class="chip ${x.tipo === 'vencimento' ? 'amb' : ''}">${x.tipo === 'vencimento' ? 'vencimento' : 'cobrança'}</span>${x.status === 'erro' ? ' <span class="chip bad">falhou</span>' : ''}</div>
+      <div class="s">${dt(x.criado_em)}${x.erro ? ' · ' + esc(x.erro) : ''}</div></div><div class="acoes"><button class="btn good sm" data-a="enviaNotif" data-id="${x.id}">Enviar</button><button class="btn sec sm" data-a="descartaNotif" data-id="${x.id}" aria-label="Descartar">✕</button></div></div>`).join('') || vazio('📭', 'Nenhuma cobrança na fila. A rotina diária coloca aqui quem está devendo.')}</div>
+    <div class="hint" style="margin:8px 2px">Ao enviar, a mensagem é refeita com o saldo de agora. Quem já pagou é descartado automaticamente.</div>`,
+};
 
 /* ---------- promoções ---------- */
-async function vPromos(){
-  const ps = await api('/promocoes');
-  $('#v').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><div class="cap" style="margin:4px 2px">Promoções</div><button class="btn" onclick="novaPromo()">+ Nova</button></div>
-  <div class="card list">${ps.map(p=>`<div class="it"><div class="main"><div class="t">${esc(p.titulo)} ${p.ativo?'':'<span class="chip">pausada</span>'}</div>
-  <div class="s">${p.preco!=null?`<b class="ok">${brl(p.preco)}</b>`:''}${p.preco_original?` <s>${brl(p.preco_original)}</s>`:''}${p.validade?` · até ${p.validade.split('-').reverse().join('/')}`:''}</div></div>
-  <button class="btn sec sm" onclick="togglePromo(${p.id},${p.ativo?0:1})">${p.ativo?'Pausar':'Ativar'}</button></div>`).join('')||'<div class="empty"><b>🏷️</b>Nenhuma promoção. Os clientes veem as ativas no app.</div>'}</div>`;
-}
-const novaPromo = () => run(async()=>{
-  const v=await form('Nova promoção',[{id:'titulo',label:'Produto / título',ph:'Arroz 5kg'},{id:'preco',label:'Preço promocional (R$)',mode:'decimal'},{id:'preco_original',label:'Preço normal (R$, opcional)',mode:'decimal'},{id:'validade',label:'Válida até (opcional)',type:'date'},{id:'descricao',label:'Descrição (opcional)',ph:'Só até acabar o estoque'}],{ok:'Publicar'});
-  if(!v||!v.titulo) return; await api('/promocoes',{method:'POST',body:v}); toast('Promoção publicada'); render();
-});
-const togglePromo = (id,ativo) => run(async()=>{ await api(`/promocoes/${id}`,{method:'PATCH',body:{ativo}}); render(); });
+VIEWS.promocoes = {
+  carrega: () => api('/promocoes'),
+  html: ps => `${secao('Promoções', '<button class="btn" data-a="novaPromo">+ Nova</button>')}
+    <div class="card list">${ps.map(p => `<div class="it"><div class="main"><div class="t">${esc(p.titulo)} ${p.ativo ? '' : '<span class="chip">pausada</span>'}${p.validade && p.validade < hojeLocal() ? ' <span class="chip bad">vencida</span>' : ''}</div>
+      <div class="s">${p.preco != null ? `<b class="ok">${brl(p.preco)}</b>` : ''}${p.preco_original ? ` <s>${brl(p.preco_original)}</s>` : ''}${p.validade ? ` · até ${dataBR(p.validade)}` : ''}${p.descricao ? ' · ' + esc(p.descricao) : ''}</div></div>
+      <div class="acoes"><button class="btn sec sm" data-a="togglePromo" data-id="${p.id}" data-v="${p.ativo ? 0 : 1}">${p.ativo ? 'Pausar' : 'Ativar'}</button><button class="btn sec sm" data-a="editaPromo" data-id="${p.id}">Editar</button></div></div>`).join('') || vazio('🏷️', 'Nenhuma promoção. Os clientes veem as ativas no app.')}</div>`,
+  liga: ps => { S.promos = ps },
+};
+const hojeLocal = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` };
 
-/* ---------- validade / produtos ---------- */
-async function vValidade(){
-  const a = await api('/alertas/validade');
-  const li = (x,cls)=>`<div class="it"><div class="main"><div class="t">${esc(x.nome)} <span class="muted small">×${x.quantidade}</span></div><div class="s">vence ${x.validade.split('-').reverse().join('/')}</div></div>
-    <span class="chip ${cls}">${x.dias_restantes<0?`venceu há ${-x.dias_restantes}d`:(x.dias_restantes===0?'vence HOJE':`em ${x.dias_restantes}d`)}</span><button class="btn sec sm" onclick="baixa(${x.entrada_id})">Dar baixa</button></div>`;
-  $('#v').innerHTML = `<div class="cap" style="margin-top:4px">Vencidos (${a.vencidos.length})</div><div class="card list">${a.vencidos.map(x=>li(x,'bad')).join('')||'<div class="empty"><b>🎉</b>Nenhum vencido.</div>'}</div>
-  <div class="cap">Vencendo em breve (${a.vencendo.length})</div><div class="card list">${a.vencendo.map(x=>li(x,'amb')).join('')||'<div class="empty">Nada vencendo.</div>'}</div>`;
-}
-const baixa = id => run(async()=>{ await api(`/entradas/${id}/baixar`,{method:'POST'}); toast('Baixa registrada'); render(); });
-async function vProdutos(){
-  const ps = await api('/produtos');
-  $('#v').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><div class="cap" style="margin:4px 2px">Produtos</div><button class="btn" onclick="novoProd()">+ Novo</button></div>
-  <div class="card list">${ps.map(p=>`<div class="it"><div class="main"><div class="t">${esc(p.nome)}</div><div class="s">em estoque: ${p.em_estoque} · avisar ${p.alerta_dias}d antes</div></div><button class="btn sec sm" onclick="entrada(${p.id})">+ Entrada</button></div>`).join('')||'<div class="empty"><b>📦</b>Nenhum produto.</div>'}</div>`;
-}
-const novoProd = () => run(async()=>{ const v=await form('Novo produto',[{id:'nome',label:'Nome'},{id:'alerta_dias',label:'Avisar quantos dias antes de vencer?',value:'7',mode:'numeric'}]); if(!v||!v.nome) return; await api('/produtos',{method:'POST',body:v}); render(); });
-const entrada = id => run(async()=>{ const v=await form('Entrada de mercadoria',[{id:'quantidade',label:'Quantidade',mode:'numeric'},{id:'validade',label:'Validade',type:'date'}],{ok:'Registrar'}); if(!v||!v.quantidade||!v.validade) return;
-  await api(`/produtos/${id}/entradas`,{method:'POST',body:{quantidade:Number(v.quantidade),validade:v.validade}}); toast('Entrada registrada'); render(); });
+/* ---------- validade ---------- */
+const chipDias = d => `<span class="chip ${d < 0 ? 'bad' : d <= 2 ? 'amb' : ''}">${d < 0 ? `venceu há ${-d}d` : d === 0 ? 'vence HOJE' : `em ${d}d`}</span>`;
+VIEWS.validade = {
+  carrega: () => api('/alertas/validade'),
+  html: a => { const li = x => `<div class="it" id="e${x.entrada_id}"><div class="main"><div class="t">${esc(x.nome)} <span class="muted small">×${x.quantidade}</span></div><div class="s">vence ${dataBR(x.validade)}</div></div>
+      ${chipDias(x.dias_restantes)}<button class="btn sec sm" data-a="baixa" data-id="${x.entrada_id}">Dar baixa</button></div>`;
+    return `${secao(`Vencidos (${a.vencidos.length})`)}<div class="card list">${a.vencidos.map(li).join('') || vazio('🎉', 'Nenhum vencido.')}</div>
+      ${secao(`Vencendo em breve (${a.vencendo.length})`)}<div class="card list">${a.vencendo.map(li).join('') || vazio('', 'Nada vencendo.')}</div>
+      <div class="hint" style="margin:8px 2px">“Dar baixa” tira o lote da lista (vendido, trocado ou descartado). Cadastre os lotes em Produtos.</div>` },
+};
 
-/* ---------- avisos / config ---------- */
-async function vAvisos(){
-  const k = await api('/contestacoes');
-  $('#v').innerHTML = `<div class="cap" style="margin-top:4px">Clientes que avisaram “tem algo errado”</div><div class="card list">${k.map(x=>`<div class="it"><div class="main"><div class="t">${esc(x.cliente_nome)} ${x.lancamento_id?`<span class="chip">lançamento #${x.lancamento_id}</span>`:''}</div><div class="s">${esc(x.mensagem||'(sem mensagem)')}</div></div><button class="btn good sm" onclick="resolve(${x.id})">Resolvido</button></div>`).join('')||'<div class="empty"><b>👍</b>Nenhum aviso.</div>'}</div>`;
+/* ---------- produtos ---------- */
+const temScanner = () => 'BarcodeDetector' in window && navigator.mediaDevices?.getUserMedia;
+function pintaProdutos() {
+  const q = S.prod.q.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const ps = (S.prod.itens || []).filter(p => !q || p.nome.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').includes(q) || (p.codigo || '').includes(q));
+  const hoje = hojeLocal();
+  $('#plista').innerHTML = ps.map(p => { const d = p.proxima_validade ? Math.round((Date.parse(p.proxima_validade) - Date.parse(hoje)) / 864e5) : null;
+    return `<div class="it click" data-a="abreProduto" data-id="${p.id}" tabindex="0"><div class="main"><div class="t">${esc(p.nome)}</div>
+      <div class="s">${p.em_estoque ? `${p.em_estoque} em estoque` : 'sem lotes'}${p.codigo ? ` · ${esc(p.codigo)}` : ''} · avisar ${p.alerta_dias}d antes</div></div>${d !== null ? chipDias(d) : ''}
+      <button class="btn sec sm" data-a="entrada" data-id="${p.id}">+ Entrada</button></div>` }).join('') || vazio('📦', S.prod.q ? 'Nenhum produto encontrado.' : 'Nenhum produto. Cadastre para receber alertas de validade.');
 }
-const resolve = id => run(async()=>{ await api(`/contestacoes/${id}/resolver`,{method:'POST'}); render(); });
-async function vConfig(){
-  const m = await api('/mercado'); const url=location.origin+'/m/'+m.slug;
-  $('#v').innerHTML = `<div class="card"><h3>Dados do mercado</h3><label class="f">Nome</label><input id="cn" value="${esc(m.nome)}"><label class="f">Chave Pix</label><input id="cp" value="${esc(m.pix_chave||'')}" placeholder="CPF, CNPJ, email, telefone ou aleatória">
-  <label class="f">Cidade (aparece no Pix)</label><input id="cc" value="${esc(m.cidade||'')}"><label class="f">WhatsApp do mercado</label><input id="cw" value="${esc(m.whatsapp||'')}">
-  <label style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" id="ci" ${m.mostrar_itens?'checked':''}> <span class="small muted">Mostrar o detalhe dos itens na conta do cliente</span></label>
-  <button class="btn block" style="margin-top:16px" onclick="salvaCfg()">Salvar</button></div>
-  <div class="card"><h3>App do cliente</h3><p class="muted small">Endereço fixo do seu mercado. Imprima o QR code e cole no balcão.</p><div style="word-break:break-all;font-weight:700">${esc(url)}</div>
-  <div class="row-btns" style="margin-top:10px"><button class="btn sec sm" onclick="copia('${esc(url)}')">Copiar endereço</button><button class="btn sec sm" onclick="verQr()">Ver QR code</button></div><div id="qrbox" style="margin-top:12px"></div></div>`;
+VIEWS.produtos = {
+  carrega: () => api('/produtos'),
+  html: () => `${secao('Produtos')}
+    <div class="barra"><div class="busca"><input id="bq" type="search" placeholder="Buscar por nome ou código…" value="${esc(S.prod.q)}" autocomplete="off" aria-label="Buscar produto"></div>
+      ${temScanner() ? '<button class="btn sec" data-a="scan" title="Ler código de barras">📷 Ler código</button>' : ''}<button class="btn" data-a="novoProd">+ Novo</button></div>
+    <div class="card list" id="plista" style="margin-top:12px"></div>`,
+  liga: ps => { S.prod.itens = ps; pintaProdutos(); $('#bq').addEventListener('input', e => { S.prod.q = e.target.value; pintaProdutos() }) },
+};
+
+/* ---------- relatórios (dono) ---------- */
+const ACAO = { 'mercado.criado': 'Criou o mercado', 'cliente.criado': 'Cadastrou cliente', 'cliente.editado': 'Editou cliente', 'cliente.novo_link': 'Gerou novo link do cliente', 'cliente.convite_app': 'Convidou cliente para o app',
+  'compra.acima_limite': 'Compra acima do limite', 'lancamento.estornado': 'Estornou lançamento', 'aviso.resolvido': 'Resolveu aviso', 'comprovante.confirmado': 'Confirmou comprovante', 'comprovante.recusado': 'Recusou comprovante',
+  'produto.excluido': 'Excluiu produto', 'senha.trocada': 'Trocou a própria senha', 'senha.redefinida_suporte': 'Senha redefinida pelo suporte', 'sessoes.encerradas': 'Saiu de todos os aparelhos',
+  'equipe.adicionado': 'Adicionou à equipe', 'equipe.desativado': 'Desativou acesso de', 'equipe.reativado': 'Reativou acesso de', 'equipe.senha_redefinida': 'Redefiniu a senha de',
+  'export.clientes': 'Exportou clientes (CSV)', 'export.lancamentos': 'Exportou lançamentos (CSV)', 'export.backup': 'Baixou o backup', 'mercado.pix_alterado': 'Alterou a chave Pix' };
+const linhaAud = a => `<div class="it"><div class="main"><div class="t" style="white-space:normal">${esc(ACAO[a.acao] || a.acao)}</div><div class="s">${dt(a.criado_em)}${a.usuario ? ` · ${esc(a.usuario)}` : ''}${a.detalhe ? ' · ' + esc(a.detalhe) : ''}</div></div></div>`;
+VIEWS.relatorios = {
+  carrega: () => Promise.all([api('/relatorios'), api('/auditoria')]),
+  html: ([r, au]) => { const tot = Object.values(r.faixas).reduce((s, v) => s + v, 0) || 1;
+    return `<div class="grade g2"><div class="card"><h3>Há quanto tempo devem</h3><div class="muted small">Pagamentos quitam primeiro as compras mais antigas.</div>
+        ${Object.entries(r.faixas).map(([f, v], i) => `<div class="faixa f${i + 1}"><span>${f} dias</span><div class="bar"><i style="width:${Math.round(v / tot * 100)}%"></i></div><b>${brl(v)}</b></div>`).join('')}</div>
+      <div class="card"><h3>Recebido neste mês</h3>${r.recebido_por_forma.map(f => `<div class="kv"><span>${esc(f.forma)} <span class="dim small">(${f.n})</span></span><b class="ok">${brl(f.total)}</b></div>`).join('') || vazio('', 'Nenhum pagamento ainda.')}</div></div>
+      ${secao('Quem deve há mais tempo')}<div class="card list">${r.devedores.slice(0, 30).map(d => `<div class="it click" data-href="/clientes/${d.id}" tabindex="0"><div class="av">${esc(ini(d.nome))}</div><div class="main"><div class="t">${esc(d.nome)} ${d.arquivado ? '<span class="chip">arquivado</span>' : ''}</div><div class="s">há ${plural(d.dias, 'dia', 'dias')}</div></div>
+        <span class="chip ${d.dias > 60 ? 'bad' : d.dias > 30 ? 'amb' : ''}">${d.faixa}</span><div class="amt bad">${brl(d.saldo)}</div></div>`).join('') || vazio('🎉', 'Ninguém devendo.')}</div>
+      ${secao('Exportar')}<div class="card"><div class="row-btns"><button class="btn sec" data-a="exporta" data-p="/export/clientes.csv">Clientes (Excel/CSV)</button><button class="btn sec" data-a="exportaLanc">Lançamentos (Excel/CSV)</button><button class="btn" data-a="exporta" data-p="/export/backup.json">Backup completo</button></div>
+        <div class="hint">Guarde o backup em um lugar seguro de tempos em tempos (ele tem os dados dos seus clientes).</div></div>
+      ${secao('Histórico de ações (auditoria)')}<div class="card list" id="aud">${au.itens.map(linhaAud).join('') || vazio('', 'Nada ainda.')}</div>
+      <button class="btn sec sm mais" id="maisAud" data-a="maisAud" style="${au.tem_mais ? '' : 'display:none'}">Carregar mais</button>` },
+  liga: ([, au]) => { S.audUlt = au.itens.at(-1)?.id },
+};
+
+/* ---------- config ---------- */
+VIEWS.config = {
+  carrega: () => Promise.all([api('/mercado'), dono() ? api('/equipe') : null]),
+  html: ([m, eq]) => { const url = location.origin + '/m/' + m.slug; return `<div class="grade g2">
+    ${dono() ? `<form class="card" id="fcfg"><h3>Dados do mercado</h3><label class="f" for="cn">Nome</label><input id="cn" value="${esc(m.nome)}" maxlength="80">
+      <label class="f" for="cp">Chave Pix</label><input id="cp" value="${esc(m.pix_chave || '')}" placeholder="CPF, CNPJ, email, telefone ou aleatória" maxlength="120">
+      <div class="dupla"><div><label class="f" for="cc">Cidade (aparece no Pix)</label><input id="cc" value="${esc(m.cidade || '')}" maxlength="60"></div><div><label class="f" for="cw">WhatsApp do mercado</label><input id="cw" value="${esc(m.whatsapp || '')}" inputmode="tel" maxlength="30"></div></div>
+      <label class="check" style="margin-top:14px"><input type="checkbox" id="ci" ${m.mostrar_itens ? 'checked' : ''}><span class="small muted">Mostrar o detalhe dos itens na conta do cliente</span></label>
+      <button class="btn block" style="margin-top:16px">Salvar</button></form>` : ''}
+    <div class="card"><h3>App do cliente</h3><p class="muted small">Endereço fixo do seu mercado. Imprima o QR code e cole no balcão.</p><div style="word-break:break-all;font-weight:700">${esc(url)}</div>
+      <div class="row-btns" style="margin-top:10px"><button class="btn sec sm" data-a="copiaTxt" data-t="${esc(url)}">Copiar endereço</button><button class="btn sec sm" data-a="verQr">Ver QR code</button></div><div id="qrbox" style="margin-top:12px"></div></div>
+    ${eq ? `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3>Equipe</h3><button class="btn sm" data-a="novoCaixa">+ Caixa</button></div>
+      <div class="muted small">Caixa lança compras e pagamentos, mas não estorna, não muda limites nem vê relatórios.</div>
+      <div class="list" style="margin-top:6px">${eq.map(u => `<div class="it"><div class="av">${esc(ini(u.nome))}</div><div class="main"><div class="t">${esc(u.nome)} <span class="papel">${u.papel}</span> ${u.ativo ? '' : '<span class="chip bad">desativado</span>'}</div><div class="s">${esc(u.email)}</div></div>
+        ${u.id !== S.eu.id ? `<div class="acoes"><button class="btn sec sm" data-a="senhaCaixa" data-id="${u.id}" data-nome="${esc(u.nome)}">Senha</button><button class="btn ${u.ativo ? 'danger' : 'good'} sm" data-a="ativaCaixa" data-id="${u.id}" data-v="${u.ativo ? 0 : 1}" data-nome="${esc(u.nome)}">${u.ativo ? 'Desativar' : 'Reativar'}</button></div>` : '<span class="tiny dim">você</span>'}</div>`).join('')}</div></div>` : ''}
+    <div class="card"><h3>Minha conta</h3><div class="kv"><span class="muted">Nome</span><b>${esc(S.eu.nome)}</b></div><div class="kv"><span class="muted">Email</span><b>${esc(S.eu.email)}</b></div>
+      <div class="row-btns" style="margin-top:12px"><button class="btn sec sm" data-a="trocaSenha">Trocar senha</button><button class="btn sec sm" data-a="sairTodos">Sair de todos os aparelhos</button><button class="btn sec sm" data-a="sair">Sair</button></div></div>
+    </div>` },
+  liga: () => { const f = $('#fcfg'); if (f) f.onsubmit = e => { e.preventDefault(); const b = $('button', f); b.classList.add('carregando');
+    run(async () => { await api('/mercado', { method: 'PATCH', body: { nome: $('#cn').value, pix_chave: $('#cp').value, whatsapp: $('#cw').value, cidade: $('#cc').value, mostrar_itens: $('#ci').checked } });
+      S.mercado.nome = $('#cn').value.trim(); $('#mnome').textContent = S.mercado.nome; toast('Salvo ✓', 'ok') }).finally(() => b.classList.remove('carregando')) } },
+};
+
+/* ====================== ações ====================== */
+const idSel = () => S.ext?.cliente?.id;
+const ACOES = {
+  sair: () => sairLocal(),
+  recarregar: () => rota(),
+  imprimir: () => print(),
+  copiaTxt: d => copia(d.t),
+  copiaLink: () => copia(S.ext.cliente.url),
+  filtro: async d => { S.cl.filtro = d.f; $$('.filtros button').forEach(b => b.classList.toggle('on', b.dataset.f === d.f)); await buscaClientes(); pintaLista() },
+  maisClientes: async (d, b) => { b.classList.add('carregando'); try { await buscaClientes(S.cl.itens.length); pintaLista() } finally { b.classList.remove('carregando') } },
+
+  novoCliente: async () => {
+    const r = await form('Novo cliente', [{ id: 'nome', label: 'Nome', ph: 'Ex.: Dona Maria', req: true, max: 80 }, { id: 'telefone', label: 'WhatsApp (com DDD)', ph: '81 99999-9999', type: 'tel', mode: 'tel' },
+      ...(dono() ? [{ id: 'limite', label: 'Limite de fiado (R$)', type: 'money', hint: 'Deixe vazio para não ter limite.' }] : []),
+      { id: 'aceitou', label: 'O cliente foi avisado que a conta pode ser consultada pelo app e concordou (LGPD)', type: 'check' }],
+      { ok: 'Cadastrar', enviar: v => api('/clientes', { method: 'POST', body: v }) });
+    if (r) { toast('Cliente cadastrado ✓', 'ok'); location.hash = '#/clientes/' + r.id }
+  },
+  compra: async d => {
+    const id = Number(d.id), nome = d.nome || S.ext?.cliente?.nome || '';
+    const lanca = v => api(`/clientes/${id}/compras`, { method: 'POST', body: v });
+    const r = await form('Compra fiada', [{ id: 'valor', label: 'Valor', type: 'money', req: true }, { id: 'descricao', label: 'Itens (opcional)', ph: 'arroz, feijão…', max: 300 }],
+      { ok: 'Lançar', sub: nome ? `Para <b>${esc(nome)}</b>` : '', enviar: async v => {
+        try { return await lanca(v) } catch (e) {
+          if (e.data?.codigo !== 'LIMITE') throw e;
+          if (await confirma('Passa do limite', esc(e.message) + '<br><br>Lançar mesmo assim?', { ok: 'Lançar mesmo assim' })) return lanca({ ...v, forcar: true });
+          throw new Error('Compra não lançada (limite).');
+        } } });
+    if (r) { vibra(); toast(`Compra lançada · saldo ${brl(r.saldo)}`, 'ok'); await atualiza(); $('#l' + r.id)?.classList.add('pisca') }
+  },
+  pagto: async () => {
+    const id = idSel(), s = S.ext.saldo;
+    const r = await form('Receber pagamento', [{ id: 'valor', label: 'Valor recebido', type: 'money', value: s > 0 ? s : '', req: true },
+      { id: 'forma', label: 'Forma', type: 'select', opts: [['pix', 'Pix'], ['dinheiro', 'Dinheiro'], ['cartão', 'Cartão'], ['outro', 'Outro']], value: 'pix' }],
+      { ok: 'Registrar', sub: s > 0 ? `Saldo atual: <b>${brl(s)}</b>` : '', enviar: v => api(`/clientes/${id}/pagamentos`, { method: 'POST', body: v }) });
+    if (r) { vibra(); toast(r.saldo <= 0 ? 'Pagamento registrado · conta quitada 🎉' : `Pagamento registrado · falta ${brl(r.saldo)}`, 'ok'); await atualiza(); $('#l' + r.id)?.classList.add('pisca') }
+  },
+  estorna: async d => {
+    const r = await form('Estornar lançamento', [{ id: 'motivo', label: 'Motivo', ph: 'Ex.: valor digitado errado', max: 150 }],
+      { ok: 'Estornar', perigo: true, sub: 'Cria um lançamento inverso. O histórico não é apagado.', enviar: v => api(`/lancamentos/${d.id}/estornar`, { method: 'POST', body: v }) });
+    if (r) { toast('Estornado ✓', 'ok'); atualiza() }
+  },
+  cobrar: async () => { await abreWa(async () => (await api(`/clientes/${idSel()}/cobrar`, { method: 'POST' })).link_wa) },
+  novoLink: async () => {
+    if (!await confirma('Gerar novo link', 'O link antigo deixa de funcionar e o cliente sai do app nos aparelhos dele (entra de novo com telefone e PIN).', { ok: 'Gerar', perigo: true })) return;
+    const r = await api(`/clientes/${idSel()}/novo-link`, { method: 'POST' });
+    S.ext.cliente.url = r.url;
+    await modal(`<h3>Novo link</h3><p class="muted small" style="word-break:break-all">${esc(r.url)}</p><div class="acts"><button class="btn sec" data-x>Fechar</button><button class="btn" data-a="copiaTxt" data-t="${esc(r.url)}">Copiar</button></div>`);
+    atualiza();
+  },
+  editaCliente: async () => {
+    const c = S.ext.cliente;
+    const r = await form('Editar cliente', [{ id: 'nome', label: 'Nome', value: c.nome, req: true, max: 80 }, { id: 'telefone', label: 'WhatsApp (com DDD)', value: c.telefone || '', type: 'tel', mode: 'tel' },
+      ...(dono() ? [{ id: 'limite', label: 'Limite de fiado (R$)', type: 'money', value: c.limite || '', hint: 'Vazio = sem limite.' },
+        { id: 'dia_vencimento', label: 'Dia de vencimento da conta', type: 'select', value: c.dia_vencimento || '', opts: [['', 'Sem dia fixo'], ...Array.from({ length: 28 }, (_, i) => [i + 1, `Todo dia ${i + 1}`])], hint: 'O cliente vê a data no app e recebe lembrete 3 dias antes e no dia.' },
+        { type: 'html', html: `<button type="button" class="btn link bad" data-a="arquivar" data-v="0" style="margin-top:14px">Arquivar cliente</button>` }] : [])],
+      { enviar: v => api(`/clientes/${c.id}`, { method: 'PATCH', body: v }) });
+    if (r) { toast('Salvo ✓', 'ok'); atualiza() }
+  },
+  arquivar: async d => {
+    const ativo = d.v === '1';
+    if (!ativo && !await confirma('Arquivar cliente', 'O cliente some da lista e o link/app dele param de funcionar. O histórico fica guardado e você pode reativar depois.', { ok: 'Arquivar', perigo: true })) return;
+    await api(`/clientes/${idSel()}`, { method: 'PATCH', body: { ativo } });
+    $$('.ov').forEach(o => o._fecha(null)); toast(ativo ? 'Cliente reativado' : 'Cliente arquivado', 'ok'); atualiza();
+  },
+  convite: async () => {
+    const r = await api(`/clientes/${idSel()}/codigo-acesso`, { method: 'POST' });
+    await modal(`<h3>Convite para o app</h3><p class="muted small">Passe este código ao cliente. Ele vale 7 dias e só funciona uma vez.</p><div class="code">${esc(r.codigo)}</div>
+      <div class="hint" style="text-align:center;word-break:break-all">Endereço: ${esc(r.url_app)}</div><div class="acts" style="flex-direction:column">
+      <a class="btn good" href="${esc(r.link_wa)}" target="_blank" rel="noopener">Enviar convite pelo WhatsApp</a><button class="btn sec" data-a="copiaTxt" data-t="${esc(r.codigo)}">Copiar código</button><button class="btn sec" data-x>Fechar</button></div>`);
+  },
+  maisHist: async (d, b) => {
+    b.classList.add('carregando');
+    try { const e = await api(`/clientes/${idSel()}/extrato?antes=${S.ext.lancamentos.at(-1).id}`); S.ext.lancamentos.push(...e.lancamentos);
+      $('#hist').insertAdjacentHTML('beforeend', e.lancamentos.map(linhaLanc).join('')); b.style.display = e.tem_mais ? '' : 'none' } finally { b.classList.remove('carregando') }
+  },
+
+  verComp: async d => {
+    const r = await api(`/pagamentos-informados/${d.id}/comprovante`, { raw: true }); const url = URL.createObjectURL(await r.blob());
+    await modal(`<h3>Comprovante</h3><img src="${url}" alt="Comprovante enviado pelo cliente" style="width:100%;border-radius:12px;margin-top:10px"><div class="acts"><button class="btn sec" data-x>Fechar</button></div>`);
+    URL.revokeObjectURL(url);
+  },
+  confirmaComp: async d => {
+    const r = await form('Confirmar pagamento', [{ id: 'valor', label: 'Valor a abater', type: 'money', value: Number(d.v), hint: 'Confira no app do banco. Corrija se o cliente digitou errado.' }],
+      { ok: 'Confirmar e abater', enviar: v => api(`/pagamentos-informados/${d.id}/confirmar`, { method: 'POST', body: v }) });
+    if (r) { vibra(); toast('Pagamento confirmado ✓', 'ok'); some('#pi' + d.id) }
+  },
+  recusaComp: async d => {
+    const r = await form('Recusar comprovante', [{ id: 'motivo', label: 'Motivo (o cliente verá)', value: 'Pagamento não encontrado', max: 200 }],
+      { ok: 'Recusar', perigo: true, enviar: v => api(`/pagamentos-informados/${d.id}/recusar`, { method: 'POST', body: v }) });
+    if (r) { toast('Recusado'); some('#pi' + d.id) }
+  },
+  resolve: async d => { await api(`/contestacoes/${d.id}/resolver`, { method: 'POST' }); toast('Marcado como resolvido', 'ok'); some('#k' + d.id) },
+  enviaNotif: async d => { try { await abreWa(async () => (await api(`/notificacoes/${d.id}/enviar`, { method: 'POST' })).link_wa) } finally { some('#n' + d.id) } },
+  descartaNotif: async d => { await api(`/notificacoes/${d.id}/descartar`, { method: 'POST' }); some('#n' + d.id) },
+
+  novaPromo: () => promoForm(),
+  editaPromo: d => promoForm(S.promos.find(p => p.id === Number(d.id))),
+  togglePromo: async d => { await api(`/promocoes/${d.id}`, { method: 'PATCH', body: { ativo: d.v === '1' } }); atualiza() },
+  excluiPromo: async d => {
+    if (!await confirma('Excluir promoção', 'Ela some do app dos clientes.', { ok: 'Excluir', perigo: true })) return;
+    await api(`/promocoes/${d.id}`, { method: 'DELETE' }); $$('.ov').forEach(o => o._fecha(null)); toast('Promoção excluída'); atualiza();
+  },
+
+  baixa: async d => { await api(`/entradas/${d.id}/baixar`, { method: 'POST' }); toast('Baixa registrada ✓', 'ok'); some('#e' + d.id); some('#le' + d.id); contadores() },
+  novoProd: async (d = {}) => {
+    const r = await form('Novo produto', [{ id: 'nome', label: 'Nome', req: true, max: 80 }, { id: 'codigo', label: 'Código de barras (opcional)', value: d.codigo || '', mode: 'numeric', max: 40 },
+      { id: 'alerta_dias', label: 'Avisar quantos dias antes de vencer?', value: '7', mode: 'numeric', max: 3 }],
+      { ok: 'Cadastrar', enviar: v => api('/produtos', { method: 'POST', body: v }) });
+    if (r) { toast('Produto cadastrado ✓', 'ok'); await atualiza(); ACOES.entrada({ id: r.id }) }
+  },
+  entrada: async d => {
+    const r = await form('Entrada de mercadoria', [{ id: 'quantidade', label: 'Quantidade', mode: 'numeric', req: true, max: 7 }, { id: 'validade', label: 'Validade', type: 'date', req: true },
+      { id: 'custo', label: 'Custo unitário (opcional)', type: 'money' }],
+      { ok: 'Registrar', enviar: v => api(`/produtos/${d.id}/entradas`, { method: 'POST', body: { ...v, quantidade: Number(v.quantidade) } }) });
+    if (r) { toast('Entrada registrada ✓', 'ok'); $$('.ov').forEach(o => o._fecha(null)); atualiza() }
+  },
+  abreProduto: async d => {
+    const p = S.prod.itens.find(x => x.id === Number(d.id)); const lotes = await api(`/produtos/${d.id}/entradas`);
+    await modal(`<h3>${esc(p.nome)}</h3><div class="muted small">${p.codigo ? 'Código ' + esc(p.codigo) + ' · ' : ''}avisar ${p.alerta_dias} dias antes</div>
+      <div class="list" style="margin-top:10px">${lotes.map(l => `<div class="it" id="le${l.id}"><div class="main"><div class="t">×${l.quantidade}</div><div class="s">vence ${dataBR(l.validade)}${l.custo ? ` · custo ${brl(l.custo)}` : ''}</div></div>${chipDias(l.dias_restantes)}<button class="btn sec sm" data-a="baixa" data-id="${l.id}">Baixa</button></div>`).join('') || vazio('', 'Nenhum lote em estoque.')}</div>
+      <div class="acts" style="flex-wrap:wrap"><button class="btn" data-a="entrada" data-id="${p.id}">+ Entrada</button><button class="btn sec" data-a="editaProd" data-id="${p.id}">Editar</button>${dono() ? `<button class="btn danger" data-a="excluiProd" data-id="${p.id}">Excluir</button>` : ''}<button class="btn sec" data-x>Fechar</button></div>`);
+  },
+  editaProd: async d => {
+    const p = S.prod.itens.find(x => x.id === Number(d.id));
+    const r = await form('Editar produto', [{ id: 'nome', label: 'Nome', value: p.nome, req: true, max: 80 }, { id: 'codigo', label: 'Código de barras', value: p.codigo || '', mode: 'numeric', max: 40 },
+      { id: 'alerta_dias', label: 'Avisar quantos dias antes de vencer?', value: String(p.alerta_dias), mode: 'numeric', max: 3 }],
+      { enviar: v => api(`/produtos/${p.id}`, { method: 'PATCH', body: v }) });
+    if (r) { toast('Salvo ✓', 'ok'); $$('.ov').forEach(o => o._fecha(null)); atualiza() }
+  },
+  excluiProd: async d => {
+    if (!await confirma('Excluir produto', 'O produto e todos os lotes dele serão apagados.', { ok: 'Excluir', perigo: true })) return;
+    await api(`/produtos/${d.id}`, { method: 'DELETE' }); $$('.ov').forEach(o => o._fecha(null)); toast('Produto excluído'); atualiza();
+  },
+  scan: () => scanner(),
+
+  exporta: async (d, b) => { b.classList.add('carregando'); try { await baixa(d.p) } finally { b.classList.remove('carregando') } },
+  exportaLanc: async () => {
+    const h = hojeLocal(), ini = h.slice(0, 8) + '01';
+    const v = await form('Exportar lançamentos', [{ id: 'de', label: 'De', type: 'date', value: ini }, { id: 'ate', label: 'Até', type: 'date', value: h }], { ok: 'Baixar' });
+    if (v) await baixa(`/export/lancamentos.csv?de=${encodeURIComponent(v.de)}&ate=${encodeURIComponent(v.ate)}`);
+  },
+  maisAud: async (d, b) => {
+    b.classList.add('carregando');
+    try { const r = await api('/auditoria?antes=' + S.audUlt); $('#aud').insertAdjacentHTML('beforeend', r.itens.map(linhaAud).join('')); S.audUlt = r.itens.at(-1)?.id; b.style.display = r.tem_mais ? '' : 'none' } finally { b.classList.remove('carregando') }
+  },
+
+  verQr: async () => { const r = await api('/mercado/qr', { raw: true }); const u = URL.createObjectURL(await r.blob());
+    $('#qrbox').innerHTML = `<div style="background:#fff;display:inline-block;padding:10px;border-radius:14px"><img src="${u}" width="240" height="240" alt="QR code do app do mercado"></div><div class="hint">O cliente aponta a câmera e abre o app do mercado.</div>` },
+  novoCaixa: async () => {
+    const r = await form('Novo acesso de caixa', [{ id: 'nome', label: 'Nome', req: true, max: 80 }, { id: 'email', label: 'Email', type: 'email', mode: 'email', req: true }, { id: 'senha', label: 'Senha inicial (mín. 8)', type: 'password', auto: 'new-password', req: true }],
+      { ok: 'Criar acesso', sub: 'Passe o email e a senha para a pessoa. Ela entra pelo mesmo endereço do painel.', enviar: v => api('/equipe', { method: 'POST', body: v }) });
+    if (r) { toast('Acesso criado ✓', 'ok'); atualiza() }
+  },
+  senhaCaixa: async d => {
+    const r = await form(`Nova senha para ${d.nome}`, [{ id: 'senha', label: 'Nova senha (mín. 8)', type: 'password', auto: 'new-password', req: true }],
+      { sub: 'A pessoa sai dos aparelhos e entra de novo com a nova senha.', enviar: v => api(`/equipe/${d.id}`, { method: 'PATCH', body: v }) });
+    if (r) toast('Senha redefinida ✓', 'ok');
+  },
+  ativaCaixa: async d => {
+    const ativo = d.v === '1';
+    if (!ativo && !await confirma('Desativar acesso', `${esc(d.nome)} perde o acesso na hora.`, { ok: 'Desativar', perigo: true })) return;
+    await api(`/equipe/${d.id}`, { method: 'PATCH', body: { ativo } }); toast(ativo ? 'Acesso reativado' : 'Acesso desativado', 'ok'); atualiza();
+  },
+  trocaSenha: async () => {
+    const r = await form('Trocar senha', [{ id: 'atual', label: 'Senha atual', type: 'password', auto: 'current-password', req: true }, { id: 'nova', label: 'Nova senha (mín. 8)', type: 'password', auto: 'new-password', req: true }],
+      { sub: 'Os outros aparelhos saem da conta; este continua conectado.', enviar: v => api('/eu/senha', { method: 'POST', body: v }) });
+    if (r) { S.tk = r.token; loc.set('tk', S.tk); toast('Senha trocada ✓', 'ok') }
+  },
+  sairTodos: async () => {
+    if (!await confirma('Sair de todos os aparelhos', 'Você e qualquer aparelho conectado com a sua conta vão precisar entrar de novo.', { ok: 'Sair de todos', perigo: true })) return;
+    await api('/eu/sair-de-todos', { method: 'POST' }); sairLocal('Você saiu de todos os aparelhos.');
+  },
+};
+// remove uma linha com animação e atualiza os contadores
+function some(sel) { const el = $(sel); if (!el) return; el.classList.add('sai'); setTimeout(() => { const lista = el.parentElement; el.remove(); if (lista && !lista.children.length) atualiza() }, 260); contadores() }
+
+async function promoForm(p) {
+  const r = await form(p ? 'Editar promoção' : 'Nova promoção', [{ id: 'titulo', label: 'Produto / título', ph: 'Arroz 5kg', value: p?.titulo, req: true, max: 80 },
+    { type: 'html', html: '<div class="dupla">' }, { id: 'preco', label: 'Preço promocional', type: 'money', value: p?.preco ?? '' }, { id: 'preco_original', label: 'Preço normal (opcional)', type: 'money', value: p?.preco_original ?? '' }, { type: 'html', html: '</div>' },
+    { id: 'validade', label: 'Válida até (opcional)', type: 'date', value: p?.validade || '' }, { id: 'descricao', label: 'Descrição (opcional)', ph: 'Só até acabar o estoque', value: p?.descricao || '', max: 300 },
+    ...(p ? [{ type: 'html', html: `<button type="button" class="btn link bad" data-a="excluiPromo" data-id="${p.id}" style="margin-top:14px">Excluir promoção</button>` }] : [])],
+    { ok: p ? 'Salvar' : 'Publicar', enviar: v => p ? api(`/promocoes/${p.id}`, { method: 'PATCH', body: v }) : api('/promocoes', { method: 'POST', body: v }) });
+  if (r) { toast(p ? 'Promoção salva ✓' : 'Promoção publicada ✓', 'ok'); atualiza() }
 }
-const salvaCfg = () => run(async()=>{ await api('/mercado',{method:'PATCH',body:{nome:$('#cn').value,pix_chave:$('#cp').value,whatsapp:$('#cw').value,cidade:$('#cc').value,mostrar_itens:$('#ci').checked}}); toast('Salvo ✓'); });
-const verQr = () => run(async()=>{ const r=await fetch('/api/mercado/qr',{headers:{authorization:'Bearer '+T}}); const u=URL.createObjectURL(await r.blob());
-  $('#qrbox').innerHTML=`<div style="background:#fff;display:inline-block;padding:10px;border-radius:14px"><img src="${u}" width="240"></div><div class="hint">O cliente aponta a câmera e abre o app do mercado.</div>`; });
-render();
+
+// leitor de código de barras pela câmera (Chrome no Android). Achou o produto: abre; não achou: oferece cadastrar.
+async function scanner() {
+  let stream, parar = false;
+  const fechou = modal(`<h3>Ler código de barras</h3><div class="muted small">Aponte a câmera para o código.</div><div class="scan"><video playsinline muted></video></div><div class="acts"><button class="btn sec" data-x>Cancelar</button></div>`, {
+    aoAbrir: async (o, fecha) => {
+      o._aoFechar = () => { parar = true; stream && stream.getTracks().forEach(t => t.stop()) };
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        const v = $('video', o); v.srcObject = stream; await v.play();
+        const det = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'] });
+        while (!parar) { const r = await det.detect(v).catch(() => []); if (r[0]) { vibra(); return fecha(r[0].rawValue) } await new Promise(z => setTimeout(z, 200)) }
+      } catch { toast('Não foi possível usar a câmera. Digite o código na busca.', 'erro'); fecha(null) }
+    } });
+  const codigo = await fechou; if (!codigo) return;
+  const p = (S.prod.itens || []).find(x => x.codigo === codigo);
+  if (p) return ACOES.abreProduto({ id: p.id });
+  if (await confirma('Produto não cadastrado', `Código <b>${esc(codigo)}</b>. Cadastrar agora?`, { ok: 'Cadastrar' })) ACOES.novoProd({ codigo });
+}
+
+if (!navigator.onLine) $('#offline').classList.add('on');
+S.tk ? inicia() : login();
 </script>
 </body>
 </html>

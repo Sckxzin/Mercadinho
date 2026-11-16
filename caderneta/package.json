@@ -1,13 +1,15 @@
 {
   "name": "caderneta",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Caderneta digital para mercadinhos: fiado, pagamentos, validade e página do cliente",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
     "seed": "node scripts/seed.js",
     "test": "node scripts/test.js",
-    "alertas": "node scripts/rotina-diaria.js"
+    "lint": "eslint .",
+    "alertas": "node scripts/rotina-diaria.js",
+    "redefinir-senha": "node scripts/redefinir-senha.js"
   },
   "engines": {
     "node": ">=20"
@@ -17,5 +19,10 @@
     "express": "^4.19.2",
     "pg": "^8.23.1",
     "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0"
   }
 }

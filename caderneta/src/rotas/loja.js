@@ -1,6 +1,6 @@
 // Promoções, Pix com valor e comprovantes de pagamento.
 const express = require('express');
-const U = require('./util');
+const U = require('../util');
 
 const MAX_IMG = 2 * 1024 * 1024; // 2 MB
 
@@ -11,29 +11,51 @@ function tipoImagem(buf) {
   return null;
 }
 
-module.exports = function registraLoja({ app, api, db, porToken, saldoDe }) {
+// valida preço / preço original / validade de uma promoção (só os campos enviados)
+function precosPromo(b = {}) {
+  const out = {};
+  for (const k of ['preco', 'preco_original']) {
+    if (b[k] === undefined) continue;
+    if (b[k] === null || String(b[k]).trim() === '') { out[k] = null; continue; }
+    out[k] = U.centavos(b[k]);
+    if (out[k] === null) return { erro: 'Preço inválido.' };
+  }
+  if (b.validade !== undefined) {
+    if (b.validade && !U.dataValida(b.validade)) return { erro: 'Validade inválida.' };
+    out.validade = b.validade || null;
+  }
+  return out;
+}
+
+module.exports = function registraLoja({ app, api, db, porToken, saldoDe, audita }) {
   // ===== DONO: promoções =====
   api.get('/promocoes', async (req, res) => {
     res.json(await db.all('SELECT * FROM promocoes WHERE mercado_id=? ORDER BY ativo DESC, id DESC', [req.mid]));
   });
   api.post('/promocoes', async (req, res) => {
-    const { titulo, descricao, preco, preco_original, validade } = req.body || {};
+    const { titulo, descricao } = req.body || {};
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório.' });
-    if (validade && !/^\d{4}-\d{2}-\d{2}$/.test(validade)) return res.status(400).json({ erro: 'Validade no formato AAAA-MM-DD.' });
+    const v = precosPromo(req.body);
+    if (v.erro) return res.status(400).json({ erro: v.erro });
     const r = await db.run('INSERT INTO promocoes (mercado_id,titulo,descricao,preco,preco_original,validade) VALUES (?,?,?,?,?,?)', [
-      req.mid, String(titulo).slice(0, 80), descricao ? String(descricao).slice(0, 300) : null,
-      preco ? U.toCents(preco) : null, preco_original ? U.toCents(preco_original) : null, validade || null]);
+      req.mid, String(titulo).slice(0, 80), U.texto(descricao, 300), v.preco ?? null, v.preco_original ?? null, v.validade ?? null]);
     res.status(201).json({ id: r.id });
   });
   api.patch('/promocoes/:id', async (req, res) => {
     const p = await db.get('SELECT * FROM promocoes WHERE id=? AND mercado_id=?', [U.intId(req.params.id), req.mid]);
     if (!p) return res.status(404).json({ erro: 'Promoção não encontrada.' });
-    const { titulo, descricao, preco, preco_original, validade, ativo } = req.body || {};
+    const { titulo, descricao, ativo } = req.body || {};
+    const v = precosPromo(req.body);
+    if (v.erro) return res.status(400).json({ erro: v.erro });
+    const n = { ...p, ...v };
     await db.run('UPDATE promocoes SET titulo=?,descricao=?,preco=?,preco_original=?,validade=?,ativo=? WHERE id=?', [
-      titulo ?? p.titulo, descricao ?? p.descricao,
-      preco === undefined ? p.preco : preco ? U.toCents(preco) : null,
-      preco_original === undefined ? p.preco_original : preco_original ? U.toCents(preco_original) : null,
-      validade === undefined ? p.validade : validade || null, ativo === undefined ? p.ativo : ativo ? 1 : 0, p.id]);
+      U.texto(titulo, 80) ?? p.titulo, descricao === undefined ? p.descricao : U.texto(descricao, 300),
+      n.preco, n.preco_original, n.validade, ativo === undefined ? p.ativo : ativo ? 1 : 0, p.id]);
+    res.json({ ok: true });
+  });
+  api.delete('/promocoes/:id', async (req, res) => {
+    const r = await db.run('DELETE FROM promocoes WHERE id=? AND mercado_id=?', [U.intId(req.params.id), req.mid]);
+    if (!r.changes) return res.status(404).json({ erro: 'Promoção não encontrada.' });
     res.json({ ok: true });
   });
 
@@ -52,27 +74,35 @@ module.exports = function registraLoja({ app, api, db, porToken, saldoDe }) {
   });
   api.post('/pagamentos-informados/:id/confirmar', async (req, res) => {
     const id = U.intId(req.params.id);
-    const p = await db.get('SELECT * FROM pagamentos_informados WHERE id=? AND mercado_id=?', [id, req.mid]);
-    if (!p) return res.status(404).json({ erro: 'Não encontrado.' });
     // o dono pode corrigir o valor se o cliente digitou errado
-    const valor = req.body?.valor ? U.toCents(req.body.valor) : p.valor;
-    if (!(valor > 0) || valor > 100_000_000) return res.status(400).json({ erro: 'Valor inválido.' });
-    // "reserva" atômica: só uma requisição consegue passar de pendente -> confirmado (sem abatimento duplo)
-    const claim = await db.run("UPDATE pagamentos_informados SET status='confirmado',valor=?,resolvido_em=to_char(now() at time zone 'utc','YYYY-MM-DD HH24:MI:SS') WHERE id=? AND mercado_id=? AND status='pendente'", [valor, id, req.mid]);
-    if (!claim.changes) return res.status(409).json({ erro: 'Já foi resolvido.' });
-    const l = await db.run("INSERT INTO lancamentos (mercado_id,cliente_id,tipo,valor,forma,descricao) VALUES (?,?,'pagamento',?,'pix',?)", [req.mid, p.cliente_id, -valor, `Comprovante #${p.id}`]);
-    await db.run('UPDATE pagamentos_informados SET lancamento_id=? WHERE id=?', [l.id, id]);
-    res.json({ saldo: await saldoDe(p.cliente_id) });
+    const informado = req.body?.valor !== undefined && String(req.body.valor).trim() !== '';
+    const valorNovo = informado ? U.centavos(req.body.valor) : undefined;
+    if (valorNovo === null) return res.status(400).json({ erro: 'Valor inválido.' });
+    // Tudo numa transação: marcar como confirmado E lançar o pagamento acontecem juntos ou
+    // não acontecem. O "WHERE status='pendente'" garante que só uma requisição confirma.
+    const out = await db.tx(async (t) => {
+      const p = await t.get("SELECT id,cliente_id,valor,status FROM pagamentos_informados WHERE id=? AND mercado_id=? FOR UPDATE", [id, req.mid]);
+      if (!p) return { status: 404, erro: 'Não encontrado.' };
+      if (p.status !== 'pendente') return { status: 409, erro: 'Já foi resolvido.' };
+      const valor = valorNovo ?? p.valor;
+      const l = await t.run("INSERT INTO lancamentos (mercado_id,cliente_id,tipo,valor,forma,descricao,usuario_id) VALUES (?,?,'pagamento',?,'pix',?,?)", [req.mid, p.cliente_id, -valor, `Comprovante #${p.id}`, req.uid]);
+      await t.run('UPDATE pagamentos_informados SET status=\'confirmado\',valor=?,lancamento_id=?,resolvido_em=? WHERE id=?', [valor, l.id, U.agoraUTC(), id]);
+      await audita(req, 'comprovante.confirmado', `#${p.id}: ${U.brl(valor)}${valor !== p.valor ? ` (informado ${U.brl(p.valor)})` : ''}`, t);
+      return { saldo: await saldoDe(p.cliente_id, t) };
+    });
+    if (out.erro) return res.status(out.status).json({ erro: out.erro });
+    res.json(out);
   });
   api.post('/pagamentos-informados/:id/recusar', async (req, res) => {
-    const r = await db.run("UPDATE pagamentos_informados SET status='recusado',motivo=?,resolvido_em=to_char(now() at time zone 'utc','YYYY-MM-DD HH24:MI:SS') WHERE id=? AND mercado_id=? AND status='pendente'",
-      [String(req.body?.motivo || '').slice(0, 200) || null, U.intId(req.params.id), req.mid]);
+    const r = await db.run("UPDATE pagamentos_informados SET status='recusado',motivo=?,resolvido_em=? WHERE id=? AND mercado_id=? AND status='pendente'",
+      [U.texto(req.body?.motivo, 200), U.agoraUTC(), U.intId(req.params.id), req.mid]);
     if (!r.changes) return res.status(404).json({ erro: 'Não encontrado ou já resolvido.' });
+    await audita(req, 'comprovante.recusado', `#${U.intId(req.params.id)}`);
     res.json({ ok: true });
   });
 
   // ===== CLIENTE (pelo link pessoal) =====
-  const hoje = () => new Date().toISOString().slice(0, 10);
+  const hoje = () => U.hojeISO();
 
   app.get('/api/publico/:token/extras', async (req, res) => {
     if (!U.limite('ext:' + req.ip, 60, 60_000)) return res.status(429).json({ erro: 'Muitas requisições.' });
@@ -93,8 +123,8 @@ module.exports = function registraLoja({ app, api, db, porToken, saldoDe }) {
     if (!c) return res.status(404).json({ erro: 'Link inválido.' });
     if (!c.pix_chave) return res.status(409).json({ erro: 'O mercado ainda não cadastrou a chave Pix.' });
     const m = await db.get('SELECT nome,cidade FROM mercados WHERE id=?', [c.mercado_id]);
-    const centavos = req.query.valor ? U.toCents(req.query.valor) : Math.max(await saldoDe(c.id), 0);
-    if (!(centavos >= 0) || centavos > 5_000_000) return res.status(400).json({ erro: 'Valor inválido.' });
+    const centavos = req.query.valor ? U.centavos(req.query.valor, { max: 5_000_000 }) : Math.max(await saldoDe(c.id), 0);
+    if (centavos === null || centavos > 5_000_000) return res.status(400).json({ erro: 'Valor inválido.' });
     res.json({ valor: centavos, copia_e_cola: U.pixPayload({ chave: c.pix_chave, nome: m.nome, cidade: m.cidade, centavos, txid: 'CAD' + c.id }) });
   });
 
@@ -103,8 +133,8 @@ module.exports = function registraLoja({ app, api, db, porToken, saldoDe }) {
     if (!U.limite('comp:' + req.ip, 5, 10 * 60_000)) return res.status(429).json({ erro: 'Muitos envios. Tente novamente em alguns minutos.' });
     const c = await porToken(req.params.token);
     if (!c) return res.status(404).json({ erro: 'Link inválido.' });
-    const valor = U.toCents(req.query.valor);
-    if (!(valor > 0) || valor > 5_000_000) return res.status(400).json({ erro: 'Informe o valor pago.' });
+    const valor = U.centavos(req.query.valor, { max: 5_000_000 });
+    if (valor === null) return res.status(400).json({ erro: 'Informe o valor pago.' });
     const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     const mime = buf.length ? tipoImagem(buf) : null;
     if (!mime) return res.status(400).json({ erro: 'Envie o comprovante como imagem JPG ou PNG (até 2 MB).' });

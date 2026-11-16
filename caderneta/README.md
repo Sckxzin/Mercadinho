@@ -6,13 +6,17 @@ alertas de validade e cobrança por WhatsApp.
 ## Rodar local (sem instalar banco)
 ```bash
 npm install
-npm run seed     # dados de demonstração (demo@demo.com / demo12345)
-npm start        # http://localhost:3000  (painel do dono)
-npm test         # 45 verificações ponta a ponta
-npm run alertas  # rotina diária: validade + fila de cobranças (agendar via cron)
+npm run seed     # demonstração: dono demo@demo.com / demo12345 · caixa caixa@demo.com / caixa12345
+npm start        # http://localhost:3000  (painel)
+npm test         # 106 verificações ponta a ponta
+npm run lint     # verificação de código
+npm run alertas  # rotina diária: validade, lembretes de vencimento e fila de cobranças (agendar via cron)
+npm run redefinir-senha -- email@exemplo.com NovaSenha123   # para quem esqueceu a senha
 ```
+Testar contra um Postgres de verdade (o banco de teste é apagado): `TEST_DATABASE_URL=postgres://... npm test`.
+Os testes rodam sozinhos no GitHub a cada envio (`.github/workflows/ci.yml`), no banco embutido e num Postgres 16.
 **Produção (Railway + Supabase):** veja `DEPLOY.md`. Banco: PostgreSQL (`DATABASE_URL`); sem ela, usa Postgres embutido local.
-Variáveis: `PORT`, `DATABASE_URL`, `APP_SECRET` (obrigatório em produção), `BASE_URL`, `REGISTRO_ABERTO`, `MIN_COBRANCA_CENTAVOS`.
+Variáveis: `PORT`, `DATABASE_URL`, `APP_SECRET` (obrigatório em produção), `BASE_URL`, `REGISTRO_ABERTO`, `MIN_COBRANCA_CENTAVOS`, `APP_TZ` (padrão `America/Sao_Paulo`) e, opcionais, `WA_TOKEN`, `WA_PHONE_ID`, `WA_TEMPLATE` (WhatsApp automático).
 
 ## O que já funciona
 - Multi-tenant (cada mercado isolado), login com scrypt + token assinado
@@ -39,11 +43,33 @@ Variáveis: `PORT`, `DATABASE_URL`, `APP_SECRET` (obrigatório em produção), `
 - O link pessoal `/c/<token>` continua existindo. "Gerar novo link" também derruba as sessões abertas do app daquele cliente.
 - Para virar app de loja (Play Store/App Store) depois: dá para empacotar este PWA (ex.: Capacitor/TWA) sem refazer nada.
 
+## v0.5 — mais seguro e mais fluido
+**Correções**
+- Valores com ponto de milhar ("1.234,56") funcionam; valores inválidos são recusados com mensagem (antes podiam gravar lixo).
+- Estorno só uma vez por lançamento (garantido pelo banco), e não dá para estornar um estorno.
+- Transações: duas compras ao mesmo tempo não furam o limite; confirmar comprovante lança o pagamento junto (ou nada).
+- "Hoje", "este mês", validade e promoções no horário de Brasília (antes, depois das 21h o sistema já achava que era o dia seguinte).
+- Telefone normalizado e único por mercado (o app do cliente não abre a conta de outra pessoa).
+- Banco com **migrações versionadas** (`schema_migracoes`): bancos antigos são atualizados sozinhos ao subir.
+- Memória do anti-abuso é limpa; cabeçalhos de segurança (CSP, anti-iframe).
+
+**Novidades**
+- **Equipe:** o dono cria acessos de **caixa** (lança compras e pagamentos; não estorna, não muda limites nem vê relatórios). Desativar derruba a sessão na hora.
+- **Minha conta:** trocar senha e "sair de todos os aparelhos".
+- **Auditoria:** quem estornou, confirmou comprovante, mudou limite, exportou dados etc.
+- **Relatórios:** há quanto tempo cada cliente deve (faixas 0-30 / 31-60 / 61-90 / 90+), recebido por forma de pagamento.
+- **Exportar:** clientes e lançamentos em CSV (abre no Excel) e **backup completo** em JSON.
+- **Clientes:** busca sem acento e por telefone, filtros (devendo / arquivados), arquivar/reativar, lista e extrato paginados, extrato para imprimir/PDF, mostra quem lançou.
+- **Dia de vencimento** da conta: o cliente vê no app e recebe lembrete 3 dias antes e no dia.
+- **Fila de cobranças** na aba Avisos: a rotina diária prepara, o dono envia com 1 toque (a mensagem é refeita com o saldo de agora; quem já pagou é descartado).
+- **WhatsApp automático (opcional)** pela API oficial da Meta — veja `src/whatsapp.js` e `DEPLOY.md`.
+- **Produtos:** editar, excluir, ver lotes, código de barras (inclusive **lendo pela câmera** no Chrome do Android).
+- **Painel fluido:** troca de tela sem recarregar, botão voltar do celular funciona, campo de dinheiro formata enquanto digita, erros aparecem dentro da janela (sem perder o que foi digitado), botões não aceitam clique duplo, "+" para lançar compra direto da lista, aviso de "sem internet".
+
 ## Próximos passos
-1. WhatsApp automático: implementar `enviar()` em `src/whatsapp.js` com a API oficial (templates aprovados, custo por conversa). Evitar libs não-oficiais.
-3. Pix com baixa automática (fase 2), PWA instalável, impressão de extrato.
-4. Painel em React se quiser UI mais rica (a API já está pronta).
-5. Notificação de promoção por WhatsApp para clientes que aceitarem receber.
+1. Pix com baixa automática: exige escolher um provedor (PSP: Mercado Pago, Efí, banco) e uma conta com API — o pagamento cairia sozinho, sem comprovante.
+2. Notificação de promoção por WhatsApp para clientes que aceitarem receber.
+3. Empacotar o app do cliente para a Play Store (TWA/Capacitor).
 
 ## Fora do escopo (de propósito)
 PDV completo e nota fiscal. Validar primeiro com 2–3 mercados reais.

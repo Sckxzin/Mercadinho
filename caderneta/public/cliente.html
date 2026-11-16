@@ -8,7 +8,7 @@
 <link rel="icon" href="/assets/icon-192.png">
 <link rel="apple-touch-icon" href="/assets/icon-192.png">
 <title>Minha conta</title>
-<link rel="stylesheet" href="/assets/ui.css">
+<link rel="stylesheet" href="/assets/ui.css?v=5">
 </head>
 <body>
 <div class="wrap" id="app"><div class="card"><div class="sk" style="width:50%"></div><div class="sk" style="width:80%;margin-top:12px"></div></div></div>
@@ -38,6 +38,7 @@ async function load(){
     <div class="brand" style="margin:2px 0 16px"><div class="logo">${esc(d.mercado.trim()[0]||'C')}</div><div><b>${esc(d.mercado)}</b><div class="muted tiny">Olá, ${esc(d.cliente)} 👋</div></div></div>
     <div class="hero"><div class="lbl">${dev?'Você está devendo':(d.saldo<0?'Crédito na loja':'Tudo em dia 🎉')}</div>
       <div class="val ${dev?'bad':'ok'}">${brl(Math.abs(d.saldo))}</div>
+      ${d.vencimento?`<div class="small ${d.vencimento.dias<=3?'amb':'muted'}" style="margin-top:6px">${d.vencimento.dias===0?'Vence <b>hoje</b>':`Vence em ${d.vencimento.data.split('-').reverse().join('/')} (${d.vencimento.dias} dia${d.vencimento.dias>1?'s':''})`}</div>`:''}
       ${dev&&x.pix_disponivel?`<button class="btn block" style="margin-top:16px" onclick="document.getElementById('pagar').scrollIntoView({behavior:'smooth'})">Pagar agora com Pix</button>`:''}</div>
 
     ${x.promocoes.length?`<div class="cap">Promoções</div>`+x.promocoes.map(pr=>`<div class="promo"><b>${esc(pr.titulo)}</b>
@@ -63,7 +64,8 @@ async function load(){
         <div class="amt ${l.valor<0?'ok':''}">${l.valor<0?'−':''}${brl(Math.abs(l.valor))}</div></div>`).join('')
       : '<div class="empty"><b>🧾</b>Nenhum lançamento ainda.</div>'}</div>
 
-    <button class="btn sec block" style="margin-top:14px" onclick="abrir(null)">Tem algo errado na minha conta?</button>
+    <button class="btn sec block np" style="margin-top:14px" onclick="abrir(null)">Tem algo errado na minha conta?</button>
+    ${tem?`<button class="btn link np" style="margin:10px auto 0;display:block" onclick="print()">Imprimir / salvar extrato em PDF</button>`:''}
     ${d.slug?`<button class="btn link" style="margin:14px auto 0;display:block" onclick="sair('${esc(d.slug)}')">Sair deste aparelho</button>`:''}
     <p class="tiny dim" style="margin-top:22px;line-height:1.6;text-align:center">Página pessoal: não compartilhe o link. Seus dados são usados apenas pelo ${esc(d.mercado)} para controle da sua conta (LGPD). Para corrigir ou apagar, fale com o mercado.</p>`;
 }
@@ -92,10 +94,14 @@ function abrir(id){ refId=id;
    <label class="f">O que está errado? (opcional)</label><textarea id="msg" rows="4"></textarea><div class="acts"><button class="btn sec" onclick="fecha()">Cancelar</button><button class="btn" onclick="enviarAviso()">Avisar o mercado</button></div></div></div>`; }
 function fecha(){ $('#dlg').innerHTML=''; }
 async function enviarAviso(){
+  const b=document.querySelector('#dlg .btn:not(.sec)'); if(b){ if(b.disabled) return; b.disabled=true; b.classList.add('carregando'); }
   await fetch('/api/publico/'+token+'/contestar',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({lancamento_id:refId,mensagem:$('#msg').value})});
   fecha(); toast('Aviso enviado. O mercado vai conferir.'); load();
 }
 function sair(slug){ try{ localStorage.removeItem('cad_token_'+slug); }catch(e){} location.href='/m/'+slug; }
+// voltou para o app/aba: atualiza o saldo (ex.: o mercado acabou de confirmar o pagamento)
+let ultimo=Date.now();
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible' && Date.now()-ultimo>15000 && !$('#dlg').innerHTML && !$('#pixbox')?.offsetParent){ ultimo=Date.now(); load(); } });
 load();
 </script>
 </body>
